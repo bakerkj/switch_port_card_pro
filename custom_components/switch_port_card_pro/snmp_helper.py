@@ -21,9 +21,114 @@ from .const import (
     CONF_OID_IFSPEED,
     CONF_OID_IFHIGHSPEED,
     CONF_OID_SYSDESCR,
+    CONF_OID_IFMAUTYPE,
+    HP_MANUFACTURER_KEYWORDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# MAU-MIB RFC 3636 (updated by RFC 4836): ifMauType values that indicate fiber/SFP media.
+# Values are OID identities under dot3MauType (1.3.6.1.2.1.26.4).
+# Suffix assignments verified against RFC 3636 §4 (entries 1-40) and RFC 4836 §4 (entries 41+).
+_FIBER_MAU_TYPES: frozenset[str] = frozenset({
+    # 10BASE-FL HD/FD — RFC 3636 .12/.13
+    "1.3.6.1.2.1.26.4.12", "1.3.6.1.2.1.26.4.13",
+    # 100BASE-FX HD/FD — RFC 3636 .17/.18
+    "1.3.6.1.2.1.26.4.17", "1.3.6.1.2.1.26.4.18",
+    # 1000BASE-X generic HD/FD — RFC 3636 .21/.22
+    "1.3.6.1.2.1.26.4.21", "1.3.6.1.2.1.26.4.22",
+    # 1000BASE-LX HD/FD — RFC 3636 .23/.24
+    "1.3.6.1.2.1.26.4.23", "1.3.6.1.2.1.26.4.24",
+    # 1000BASE-SX HD/FD — RFC 3636 .25/.26
+    "1.3.6.1.2.1.26.4.25", "1.3.6.1.2.1.26.4.26",
+    # 1000BASE-CX HD/FD (twinax) — RFC 3636 .27/.28
+    "1.3.6.1.2.1.26.4.27", "1.3.6.1.2.1.26.4.28",
+    # 10GBASE fiber variants — RFC 3636 .32-.40
+    # .31 (10GBASE-X) excluded: generic placeholder, covers both copper and fiber subtypes
+    "1.3.6.1.2.1.26.4.32",
+    "1.3.6.1.2.1.26.4.33", "1.3.6.1.2.1.26.4.34", "1.3.6.1.2.1.26.4.35",
+    "1.3.6.1.2.1.26.4.36", "1.3.6.1.2.1.26.4.37", "1.3.6.1.2.1.26.4.38",
+    "1.3.6.1.2.1.26.4.39", "1.3.6.1.2.1.26.4.40",
+    # 100BASE-BX10 single-fiber — RFC 4836 .44/.45
+    "1.3.6.1.2.1.26.4.44", "1.3.6.1.2.1.26.4.45",
+    # 100BASE-LX10 — RFC 4836 .46
+    "1.3.6.1.2.1.26.4.46",
+    # 1000BASE-BX10 single-fiber — RFC 4836 .47/.48
+    "1.3.6.1.2.1.26.4.47", "1.3.6.1.2.1.26.4.48",
+    # 1000BASE-LX10 — RFC 4836 .49
+    "1.3.6.1.2.1.26.4.49",
+    # 1000BASE-PX PON — RFC 4836 .50-.53
+    "1.3.6.1.2.1.26.4.50", "1.3.6.1.2.1.26.4.51",
+    "1.3.6.1.2.1.26.4.52", "1.3.6.1.2.1.26.4.53",
+    # 10GBASE-LRM — RFC 4836 .55
+    "1.3.6.1.2.1.26.4.55",
+    # 40GBASE fiber — RFC 4836 .72/.73/.74
+    "1.3.6.1.2.1.26.4.72", "1.3.6.1.2.1.26.4.73", "1.3.6.1.2.1.26.4.74",
+    # 100GBASE fiber — RFC 4836 .76/.77/.78
+    "1.3.6.1.2.1.26.4.76", "1.3.6.1.2.1.26.4.77", "1.3.6.1.2.1.26.4.78",
+})
+
+MAU_TYPE_NAMES: dict[str, str] = {
+    # Copper — RFC 3636
+    "1.3.6.1.2.1.26.4.10": "10BASE-T HD",
+    "1.3.6.1.2.1.26.4.11": "10BASE-T FD",
+    "1.3.6.1.2.1.26.4.15": "100BASE-TX HD",
+    "1.3.6.1.2.1.26.4.16": "100BASE-TX FD",
+    "1.3.6.1.2.1.26.4.19": "100BASE-T2 HD",
+    "1.3.6.1.2.1.26.4.20": "100BASE-T2 FD",
+    "1.3.6.1.2.1.26.4.29": "1000BASE-T HD",
+    "1.3.6.1.2.1.26.4.30": "1000BASE-T FD",
+    "1.3.6.1.2.1.26.4.41": "10GBASE-CX4",
+    # Copper — RFC 4836
+    "1.3.6.1.2.1.26.4.54": "10GBASE-T",
+    "1.3.6.1.2.1.26.4.56": "1000BASE-KX",
+    "1.3.6.1.2.1.26.4.57": "10GBASE-KX4",
+    "1.3.6.1.2.1.26.4.58": "10GBASE-KR",
+    "1.3.6.1.2.1.26.4.70": "40GBASE-KR4",
+    "1.3.6.1.2.1.26.4.71": "40GBASE-CR4",
+    "1.3.6.1.2.1.26.4.75": "100GBASE-CR10",
+    # Fiber — RFC 3636
+    "1.3.6.1.2.1.26.4.12": "10BASE-FL HD",
+    "1.3.6.1.2.1.26.4.13": "10BASE-FL FD",
+    "1.3.6.1.2.1.26.4.17": "100BASE-FX HD",
+    "1.3.6.1.2.1.26.4.18": "100BASE-FX FD",
+    "1.3.6.1.2.1.26.4.21": "1000BASE-X HD",
+    "1.3.6.1.2.1.26.4.22": "1000BASE-X FD",
+    "1.3.6.1.2.1.26.4.23": "1000BASE-LX HD",
+    "1.3.6.1.2.1.26.4.24": "1000BASE-LX FD",
+    "1.3.6.1.2.1.26.4.25": "1000BASE-SX HD",
+    "1.3.6.1.2.1.26.4.26": "1000BASE-SX FD",
+    "1.3.6.1.2.1.26.4.27": "1000BASE-CX HD",
+    "1.3.6.1.2.1.26.4.28": "1000BASE-CX FD",
+    "1.3.6.1.2.1.26.4.31": "10GBASE-X",  # generic — copper or fiber subtype
+    "1.3.6.1.2.1.26.4.32": "10GBASE-LX4",
+    "1.3.6.1.2.1.26.4.33": "10GBASE-R",
+    "1.3.6.1.2.1.26.4.34": "10GBASE-ER",
+    "1.3.6.1.2.1.26.4.35": "10GBASE-LR",
+    "1.3.6.1.2.1.26.4.36": "10GBASE-SR",
+    "1.3.6.1.2.1.26.4.37": "10GBASE-W",
+    "1.3.6.1.2.1.26.4.38": "10GBASE-EW",
+    "1.3.6.1.2.1.26.4.39": "10GBASE-LW",
+    "1.3.6.1.2.1.26.4.40": "10GBASE-SW",
+    # Fiber — RFC 4836
+    "1.3.6.1.2.1.26.4.44": "100BASE-BX10D",
+    "1.3.6.1.2.1.26.4.45": "100BASE-BX10U",
+    "1.3.6.1.2.1.26.4.46": "100BASE-LX10",
+    "1.3.6.1.2.1.26.4.47": "1000BASE-BX10D",
+    "1.3.6.1.2.1.26.4.48": "1000BASE-BX10U",
+    "1.3.6.1.2.1.26.4.49": "1000BASE-LX10",
+    "1.3.6.1.2.1.26.4.50": "1000BASE-PX10D",
+    "1.3.6.1.2.1.26.4.51": "1000BASE-PX10U",
+    "1.3.6.1.2.1.26.4.52": "1000BASE-PX20D",
+    "1.3.6.1.2.1.26.4.53": "1000BASE-PX20U",
+    "1.3.6.1.2.1.26.4.55": "10GBASE-LRM",
+    "1.3.6.1.2.1.26.4.72": "40GBASE-SR4",
+    "1.3.6.1.2.1.26.4.73": "40GBASE-FR",
+    "1.3.6.1.2.1.26.4.74": "40GBASE-LR4",
+    "1.3.6.1.2.1.26.4.76": "100GBASE-SR10",
+    "1.3.6.1.2.1.26.4.77": "100GBASE-LR4",
+    "1.3.6.1.2.1.26.4.78": "100GBASE-ER4",
+}
 
 # Global engine and lock for thread-safe initialization
 _SNMP_ENGINE = None
@@ -243,20 +348,15 @@ async def discover_physical_ports(
             return {}
         
         _LOGGER.debug("ifDescr data from %s: %d interfaces found", host, len(descr_data))
-        
-        # Step 2: Get interface types (for reliable SFP detection)
-        type_data = await async_snmp_walk(
-            hass, host, community, snmp_port, CONF_OID_IFTYPE, mp_model=mp_model
+
+        # Step 2: Get speed, ifType, and MAU type (parallel)
+        speed_data, high_speed_data, type_data, mau_data = await asyncio.gather(
+            async_snmp_walk(hass, host, community, snmp_port, CONF_OID_IFSPEED, mp_model=mp_model),
+            async_snmp_walk(hass, host, community, snmp_port, CONF_OID_IFHIGHSPEED, mp_model=mp_model),
+            async_snmp_walk(hass, host, community, snmp_port, CONF_OID_IFTYPE, mp_model=mp_model),
+            async_snmp_walk(hass, host, community, snmp_port, CONF_OID_IFMAUTYPE, mp_model=mp_model),
         )
-        _LOGGER.debug("ifType data from %s: %d types found", host, len(type_data))
-        
-        # Step 3: Get speed data
-        speed_data = await async_snmp_walk(
-            hass, host, community, snmp_port, CONF_OID_IFSPEED, mp_model=mp_model
-        )
-        high_speed_data = await async_snmp_walk(
-            hass, host, community, snmp_port, CONF_OID_IFHIGHSPEED, mp_model=mp_model
-        )
+        _LOGGER.debug("MAU-MIB data from %s: %d entries", host, len(mau_data))
         
         # Step 4: Get sysDescr for manufacturer info
         sys_descr_data = await async_snmp_walk(
@@ -289,10 +389,26 @@ async def discover_physical_ports(
             if not is_likely_physical:
                 continue
             
-            # === STEP 3: SFP vs Copper detection ===
-            if_type = _get_interface_type(type_data, if_index)
-            is_sfp, detection = _detect_sfp_port(if_type, descr_lower)
-            is_copper = not is_sfp
+            # === STEP 3: Fiber vs Copper detection ===
+            # Primary: MAU-MIB (RFC 3636/4836) — authoritative when available
+            # Fallback: ifType + description heuristics
+            mau_key_prefix = f"{CONF_OID_IFMAUTYPE}.{if_index}."
+            mau_type_oid = next(
+                (v for k, v in mau_data.items() if k.startswith(mau_key_prefix)), None
+            )
+            if mau_type_oid is not None:
+                # Normalize: pysnmp may return "iso.3.6..." instead of "1.3.6..."
+                if mau_type_oid.startswith("iso."):
+                    mau_type_oid = "1." + mau_type_oid[4:]
+                is_sfp = mau_type_oid in _FIBER_MAU_TYPES
+                is_copper = not is_sfp
+                port_type = MAU_TYPE_NAMES.get(mau_type_oid, "unknown")
+                detection = "mau_mib"
+            else:
+                if_type = _get_interface_type(type_data, if_index)
+                is_sfp, detection = _detect_sfp_port(if_type, descr_lower, manufacturer)
+                is_copper = not is_sfp
+                port_type = "unknown"
             
             # === STEP 4: Port speed ===
             speed_mbps = _get_port_speed(speed_data, high_speed_data, if_index)
@@ -309,6 +425,7 @@ async def discover_physical_ports(
                 "detection": detection,
                 "speed_mbps": speed_mbps,
                 "manufacturer": manufacturer,
+                "port_type": port_type,
             }
             logical_port += 1
         
@@ -399,51 +516,56 @@ def _is_physical_interface(descr_lower: str, descr_clean: str, if_index: int) ->
 
 
 def _get_interface_type(type_data: dict, if_index: int) -> int:
-    """Extract interface type from SNMP data."""
-    raw_type = "0"
-    
+    """Extract interface type from SNMP ifType data (IANAifType)."""
     for t_oid, t_val in type_data.items():
         if t_oid.endswith(f".{if_index}"):
-            raw_type = t_val
-            break
-    
-    try:
-        # Handle types like "ethernetCsmacd(6)"
-        if '(' in str(raw_type):
-            match_type = re.search(r'\((\d+)\)', str(raw_type))
-            return int(match_type.group(1)) if match_type else 0
-        return int(raw_type)
-    except (ValueError, TypeError):
-        return 0
+            try:
+                # Handle types like "ethernetCsmacd(6)"
+                if '(' in str(t_val):
+                    match_type = re.search(r'\((\d+)\)', str(t_val))
+                    return int(match_type.group(1)) if match_type else 0
+                return int(t_val)
+            except (ValueError, TypeError):
+                return 0
+    return 0
 
-def _detect_sfp_port(if_type: int, descr_lower: str) -> tuple[bool, str]:
-    """Detect if port is SFP/fiber based on type and name."""
+
+def _detect_sfp_port(if_type: int, descr_lower: str, manufacturer: str = "") -> tuple[bool, str]:
+    """Detect if port is fiber based on ifType and description keywords.
+    Only used when MAU-MIB data is unavailable.
+    """
+    # HP/Aruba: uplink ports named A1-A4 are SFP slots
+    if any(m in manufacturer.lower() for m in HP_MANUFACTURER_KEYWORDS):
+        if re.match(r'^[a-z]\d+$', descr_lower):
+            return True, "hp_uplink_name"
+
     # Netgear 10G special case
     if "10g - level" in descr_lower:
         return True, "netgear_10g_sfp"
 
-    # Cisco stack/modular slot logic
+    # Cisco stack/modular slot: GigabitEthernetX/Y/Z where Y > 0 is a module slot
     cisco_slot_match = re.search(r'gigabithethernet(\d+)/(\d+)/(\d+)', descr_lower)
     if cisco_slot_match:
         module_slot = int(cisco_slot_match.group(2))
-        if module_slot > 0:
-            return True, "cisco_module_sfp"
-        return False, "cisco_fixed_copper"
+        return (True, "cisco_module_sfp") if module_slot > 0 else (False, "cisco_fixed_copper")
 
-    # Standard SNMP types for fiber
-    if if_type in (56, 161, 171, 172):
-        return True, "type_match"
-    
-    # Common keyword matching
-    is_sfp_by_name = any(k in descr_lower for k in [
-        "sfp", "fiber", "fibre", "optical", "1000base-x", "10gbase-", 
-        "mini-gbic", "sfp+", "sfp28", "25g", "40g", "100g", "qsfp"
+    # IANA ifType: 56=fibreChannel, 171=pos (Packet over SONET/SDH)
+    # Verified against IANA ifType registry — 161=LAG and 172=DVB excluded
+    if if_type in (56, 171):
+        return True, "iftype_fiber"
+
+    # Description keyword matching
+    # "10gbase-t" is copper — only match known fiber 10G variants explicitly
+    is_fiber_by_name = any(k in descr_lower for k in [
+        "sfp", "fiber", "fibre", "optical", "1000base-x",
+        "10gbase-sr", "10gbase-lr", "10gbase-er", "10gbase-lrm", "10gbase-zr",
+        "mini-gbic", "sfp+", "sfp28", "25g", "40g", "100g", "qsfp", "fortygigabit",
     ])
-    
-    if is_sfp_by_name or "fortygigabit" in descr_lower:
+    if is_fiber_by_name:
         return True, "name_keyword"
 
     return False, "default_copper"
+
 
 def _get_port_speed(speed_data: dict, high_speed_data: dict, if_index: int) -> int:
     """Get port speed in Mbps."""
