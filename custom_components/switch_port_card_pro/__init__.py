@@ -116,8 +116,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ports = None
     manufacturer = "Unknown"  # Initialize here, outside try block
     detection_summary = "manual"  # Initialize here too
-    is_first_install = CONF_PORTS not in entry.options
-    
+    force_redetect = entry.options.get("re_detect_ports", False)
+    is_first_install = CONF_PORTS not in entry.options or force_redetect
+
     try:
         detected = await discover_physical_ports(hass, host, community, snmp_port, mp_model)
         if detected:
@@ -149,6 +150,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # === CONFIGURE PORTS ===
     if is_first_install:
         new_options = dict(entry.options)
+        new_options.pop("re_detect_ports", None)  # clear flag — listener not yet registered so no reload loop
         
         if detected:
             # Auto-configure from detection

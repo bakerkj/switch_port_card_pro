@@ -6,7 +6,17 @@
         "description": "Konfiguriere deinen SNMP-fähigen Netzwerk-Switch",
         "data": {
           "host": "IP-Adresse oder Hostname des Switches",
-          "community": "SNMP-Community-String"
+          "community": "SNMP-Community-String",
+          "snmp_port": "SNMP-Port"
+        }
+      },
+      "reconfigure": {
+        "title": "Switch-Verbindung neu konfigurieren",
+        "description": "IP-Adresse, Community-String oder SNMP-Port ändern. Vor dem Speichern wird eine Verbindung getestet.",
+        "data": {
+          "host": "IP-Adresse oder Hostname des Switches",
+          "community": "SNMP-Community-String",
+          "snmp_port": "SNMP-Port"
         }
       }
     }
@@ -19,6 +29,7 @@
         "data": {
           "update_interval": "Aktualisierungsintervall (Sekunden)",
           "ports": "Zu überwachende Ports",
+          "re_detect_ports": "Port-Erkennung beim Speichern erneut ausführen (überschreibt Port-Liste)",
           "oid_rx": "RX-Zähler OID (für Live-RX-Berechnung)",
           "oid_tx": "TX-Zähler OID (für Live-TX-Berechnung)",
           "oid_status": "Port-Status OID (bestimmt Ein/Aus)",

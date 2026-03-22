@@ -125,6 +125,48 @@ class SwitchPortCardProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if result is None:
             raise ConnectionError(f"No SNMP response from {host}:{snmp_port}")
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Allow changing host, community string, or SNMP port without re-adding."""
+        errors: dict[str, str] = {}
+        entry = self._get_reconfigure_entry()
+
+        if user_input is not None:
+            try:
+                await self._test_connection(
+                    self.hass,
+                    user_input[CONF_HOST],
+                    user_input[CONF_COMMUNITY],
+                    user_input[CONF_SNMP_PORT],
+                )
+            except ConnectionError:
+                errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected error during reconfigure")
+                errors["base"] = "unknown"
+
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    title=user_input[CONF_HOST],
+                    data_updates={
+                        CONF_HOST: user_input[CONF_HOST],
+                        CONF_COMMUNITY: user_input[CONF_COMMUNITY],
+                        CONF_SNMP_PORT: user_input[CONF_SNMP_PORT],
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({
+                vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, "")): str,
+                vol.Required(CONF_COMMUNITY, default=entry.data.get(CONF_COMMUNITY, "public")): str,
+                vol.Required(CONF_SNMP_PORT, default=entry.data.get(CONF_SNMP_PORT, DEFAULT_SNMP_PORT)): vol.All(vol.Coerce(int), vol.Range(min=1, max=10000)),
+            }),
+            errors=errors,
+        )
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry):
@@ -180,6 +222,10 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                     CONF_PORTS,
                     default=current_ports,
                 ): cv.multi_select(ports_dict),
+                vol.Optional(
+                    "re_detect_ports",
+                    default=False,
+                ): cv.boolean,
                 
  #               vol.Optional(
  #                   CONF_INCLUDE_VLANS,
