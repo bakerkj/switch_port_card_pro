@@ -260,8 +260,8 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 return next((v for k, v in raw_system.items() if oid and k.startswith(oid)), None)
 
             system = {
-                "cpu": get("cpu") or get("cpu_zyxel"),
-                "memory": get("memory") or get("memory_zyxel"),
+                "cpu": get("cpu"),
+                "memory": get("memory"),
                 "hostname": get("hostname"),
                 "uptime": get("uptime"),
                 "firmware": get("firmware"),
