@@ -385,6 +385,7 @@ def _is_physical_interface(descr_lower: str, descr_clean: str, if_index: int) ->
         ]) or
         re.match(r'^gigabithethernet\d+', descr_lower) or
         re.match(r'^[pg]\d+$', descr_lower) or
+        re.match(r'^[a-z]\d+$', descr_lower) or  # e.g. A1, A2, A3, A4 (uplink/SFP ports)
         (descr_lower.startswith("slot:") and "port:" in descr_lower)
     )
     
