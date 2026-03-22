@@ -33,6 +33,8 @@ from .const import (
     HP_OID_MEMORY_USED,
     HP_OID_MEMORY_TOTAL,
     HP_MANUFACTURER_KEYWORDS,
+    CONF_OID_IFHCINOCTETS,
+    CONF_OID_IFHCOUTOCTETS,
 )
 from .snmp_helper import (
     async_snmp_get,
@@ -100,7 +102,10 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, self.base_oids[k], mp_model=self.mp_model)
                 for k in oids_to_walk if self.base_oids.get(k)
             ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Always walk HC 64-bit counters — standard IF-MIB, not user-configurable
+            hc_rx_task = async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCINOCTETS, mp_model=self.mp_model)
+            hc_tx_task = async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCOUTOCTETS, mp_model=self.mp_model)
+            *results, hc_rx_raw, hc_tx_raw = await asyncio.gather(*tasks, hc_rx_task, hc_tx_task, return_exceptions=True)
 
             walk_map: dict[str, dict[str, str]] = {}
             for key, result in zip([k for k in oids_to_walk if self.base_oids.get(k)], results):
@@ -125,6 +130,8 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
 
             rx = parse(walk_map.get("rx", {}))
             tx = parse(walk_map.get("tx", {}))
+            hc_rx = parse(hc_rx_raw if not isinstance(hc_rx_raw, Exception) else {})
+            hc_tx = parse(hc_tx_raw if not isinstance(hc_tx_raw, Exception) else {})
             status = parse(walk_map.get("status", {}))
             speed = parse(walk_map.get("speed", {}))
             name = parse(walk_map.get("name", {}), int_val=False)
@@ -213,8 +220,8 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     ports_data[p].update({
                         "status": "on" if status.get(if_index, 2) == 1 else "off",
                         "speed": HighLowSpeed,
-                        "rx": rx.get(if_index, 0),
-                        "tx": tx.get(if_index, 0),
+                        "rx": hc_rx.get(if_index) if if_index in hc_rx else rx.get(if_index, 0),
+                        "tx": hc_tx.get(if_index) if if_index in hc_tx else tx.get(if_index, 0),
                         "name": name.get(if_index, f"Port {port}"),
                         "vlan": vlan.get(vlan_bridge_port),
                         "vlan_id_list": vlan_id_list,
@@ -224,23 +231,27 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                         "port_custom": port_custom.get(if_index, 0),
                     })
 
-                total_rx += rx.get(if_index, 0)
-                total_tx += tx.get(if_index, 0)
+                total_rx += hc_rx.get(if_index) if if_index in hc_rx else rx.get(if_index, 0)
+                total_tx += hc_tx.get(if_index) if if_index in hc_tx else tx.get(if_index, 0)
                 total_poe_mw += poe_power.get(if_index, 0)
 
             # compute current totals (these are lifetime counters) in bytes
             current_total_bytes = total_rx + total_tx
             # compute delta from last poll
             delta_total = current_total_bytes - getattr(self, "_last_total_bytes", 0)
-            # handle negative (counter reset or wrap) if needed
+            # Handle counter wrap or reset
             if delta_total < 0:
-                # Heuristic: assume 32-bit wrap if last_total was large
-                MAX32 = 4294967296
-                if getattr(self, "_last_total_bytes", 0) > 3_000_000_000:
-                    delta_total = (MAX32 - self._last_total_bytes) + current_total_bytes
-                else:
-                    # real reset, treat as zero
+                using_hc = bool(hc_rx or hc_tx)
+                if using_hc:
+                    # 64-bit: treat negative as reset
                     delta_total = 0
+                else:
+                    # 32-bit wrap at 2^32 bytes (~4GB)
+                    MAX32 = 4_294_967_296
+                    if getattr(self, "_last_total_bytes", 0) > 3_000_000_000:
+                        delta_total = (MAX32 - self._last_total_bytes) + current_total_bytes
+                    else:
+                        delta_total = 0
             # prefer using configured stable interval if available
             delta_time = getattr(self, "update_seconds", 20)
             if delta_time <= 0:
