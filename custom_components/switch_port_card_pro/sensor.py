@@ -35,6 +35,13 @@ from .const import (
     HP_MANUFACTURER_KEYWORDS,
     CONF_OID_IFHCINOCTETS,
     CONF_OID_IFHCOUTOCTETS,
+    CONF_OID_IFINERRORS,
+    CONF_OID_IFOUTERRORS,
+    CONF_OID_IFINDISCARDS,
+    CONF_OID_IFOUTDISCARDS,
+    CONF_OID_IFADMINSTATUS,
+    CONF_OID_IFLASTCHANGE,
+    CONF_OID_SYSUPTIME,
 )
 from .snmp_helper import (
     async_snmp_get,
@@ -102,10 +109,25 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, self.base_oids[k], mp_model=self.mp_model)
                 for k in oids_to_walk if self.base_oids.get(k)
             ]
-            # Always walk HC 64-bit counters — standard IF-MIB, not user-configurable
-            hc_rx_task = async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCINOCTETS, mp_model=self.mp_model)
-            hc_tx_task = async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCOUTOCTETS, mp_model=self.mp_model)
-            *results, hc_rx_raw, hc_tx_raw = await asyncio.gather(*tasks, hc_rx_task, hc_tx_task, return_exceptions=True)
+            # Always walk standard IF-MIB OIDs — not user-configurable
+            (
+                hc_rx_raw, hc_tx_raw,
+                in_errors_raw, out_errors_raw,
+                in_discards_raw, out_discards_raw,
+                admin_status_raw, last_change_raw,
+                *results
+            ) = await asyncio.gather(
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCINOCTETS, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCOUTOCTETS, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFINERRORS, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFOUTERRORS, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFINDISCARDS, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFOUTDISCARDS, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFADMINSTATUS, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFLASTCHANGE, mp_model=self.mp_model),
+                *tasks,
+                return_exceptions=True,
+            )
 
             walk_map: dict[str, dict[str, str]] = {}
             for key, result in zip([k for k in oids_to_walk if self.base_oids.get(k)], results):
@@ -132,6 +154,21 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             tx = parse(walk_map.get("tx", {}))
             hc_rx = parse(hc_rx_raw if not isinstance(hc_rx_raw, Exception) else {})
             hc_tx = parse(hc_tx_raw if not isinstance(hc_tx_raw, Exception) else {})
+            in_errors = parse(in_errors_raw if not isinstance(in_errors_raw, Exception) else {})
+            out_errors = parse(out_errors_raw if not isinstance(out_errors_raw, Exception) else {})
+            in_discards = parse(in_discards_raw if not isinstance(in_discards_raw, Exception) else {})
+            out_discards = parse(out_discards_raw if not isinstance(out_discards_raw, Exception) else {})
+            admin_status = parse(admin_status_raw if not isinstance(admin_status_raw, Exception) else {})
+            last_change = parse(last_change_raw if not isinstance(last_change_raw, Exception) else {})
+            # sysUpTime for computing time-since-last-change
+            sys_uptime_raw = await async_snmp_get(
+                self.hass, self.host, self.community, self.snmp_port,
+                CONF_OID_SYSUPTIME, mp_model=self.mp_model,
+            )
+            try:
+                sys_uptime_ticks = int(sys_uptime_raw) if sys_uptime_raw is not None else None
+            except (ValueError, TypeError):
+                sys_uptime_ticks = None
             status = parse(walk_map.get("status", {}))
             speed = parse(walk_map.get("speed", {}))
             name = parse(walk_map.get("name", {}), int_val=False)
@@ -204,6 +241,12 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     "poe_status": 0,
                     "poe_class": None,
                     "port_custom": 0,
+                    "admin_status": None,
+                    "in_errors": 0,
+                    "out_errors": 0,
+                    "in_discards": 0,
+                    "out_discards": 0,
+                    "last_change_seconds": None,
                 }
 
                 # For VLAN: dot1qPvid is indexed by bridge port, not ifIndex (RFC 4363).
@@ -229,6 +272,12 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                         "poe_status": poe_status.get(if_index, 0),
                         "poe_class": poe_class_data.get(if_index),
                         "port_custom": port_custom.get(if_index, 0),
+                        "admin_status": "up" if admin_status.get(if_index) == 1 else "down" if admin_status.get(if_index) == 2 else None,
+                        "in_errors": in_errors.get(if_index, 0),
+                        "out_errors": out_errors.get(if_index, 0),
+                        "in_discards": in_discards.get(if_index, 0),
+                        "out_discards": out_discards.get(if_index, 0),
+                        "last_change_seconds": round((sys_uptime_ticks - last_change.get(if_index)) / 100) if sys_uptime_ticks is not None and if_index in last_change else None,
                     })
 
                 total_rx += hc_rx.get(if_index) if if_index in hc_rx else rx.get(if_index, 0)
@@ -592,6 +641,12 @@ class PortStatusSensor(SwitchPortBaseEntity):
                 "is_copper": bool(port_info.get("is_copper", True)),
                 "interface": port_info.get("if_descr"),  # e.g. "eth5"
                 "custom": p.get("port_custom"),
+                "admin_status": p.get("admin_status"),
+                "in_errors": p.get("in_errors", 0),
+                "out_errors": p.get("out_errors", 0),
+                "in_discards": p.get("in_discards", 0),
+                "out_discards": p.get("out_discards", 0),
+                "last_change_seconds": p.get("last_change_seconds"),
             }
             if self.coordinator.include_vlans:
                 if p.get("vlan") is not None:
