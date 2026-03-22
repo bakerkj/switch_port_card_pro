@@ -54,6 +54,10 @@ CONF_OID_POE_BUDGET_CONSUMED: Final = "1.3.6.1.2.1.105.1.3.1.1.3" # pethMainPseC
 CONF_OID_SYSDESCR: Final = "1.3.6.1.2.1.1.1.0"
 CONF_OID_SYSNAME: Final = "1.3.6.1.2.1.1.5.0"
 CONF_OID_IFMAUTYPE: Final = "1.3.6.1.2.1.26.2.1.1.3"  # MAU-MIB ifMauType (RFC 4836)
+CONF_OID_ENT_SENSOR_TYPE: Final = "1.3.6.1.2.1.99.1.1.1.1"     # entPhySensorType (RFC 3433)
+CONF_OID_ENT_SENSOR_VALUE: Final = "1.3.6.1.2.1.99.1.1.1.4"    # entPhySensorValue
+CONF_OID_ENT_SENSOR_OPSTATUS: Final = "1.3.6.1.2.1.99.1.1.1.5" # entPhySensorOperStatus (1=ok, 2=unavailable)
+CONF_OID_ENT_PHYSICAL_NAME: Final = "1.3.6.1.2.1.47.1.1.1.1.7" # entPhysicalName (ENTITY-MIB)
 
 SNMP_VERSION_TO_MP_MODEL = {
     "v1": 0,

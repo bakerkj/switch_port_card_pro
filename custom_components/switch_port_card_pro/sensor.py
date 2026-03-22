@@ -15,6 +15,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     UnitOfDataRate,
+    UnitOfTemperature,
     UnitOfTime,
     PERCENTAGE,
 )
@@ -44,6 +45,10 @@ from .const import (
     CONF_OID_SYSUPTIME,
     CONF_OID_POE_BUDGET_TOTAL,
     CONF_OID_POE_BUDGET_CONSUMED,
+    CONF_OID_ENT_SENSOR_TYPE,
+    CONF_OID_ENT_SENSOR_VALUE,
+    CONF_OID_ENT_SENSOR_OPSTATUS,
+    CONF_OID_ENT_PHYSICAL_NAME,
 )
 from .snmp_helper import (
     async_snmp_get,
@@ -373,20 +378,82 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                         except (ValueError, TypeError):
                             pass
 
-            # PoE budget — pethMainPseTable (POWER-ETHERNET-MIB RFC 3621), indexed by group (.1)
-            poe_budget_raw, poe_consumed_raw = await asyncio.gather(
+            # PoE budget (RFC 3621) + ENTITY-SENSOR-MIB (RFC 3433) — all in parallel
+            (
+                poe_budget_raw, poe_consumed_raw,
+                ent_type_raw, ent_value_raw, ent_opstatus_raw, ent_name_raw,
+            ) = await asyncio.gather(
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_POE_BUDGET_TOTAL, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_POE_BUDGET_CONSUMED, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_TYPE, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_VALUE, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_OPSTATUS, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_PHYSICAL_NAME, mp_model=self.mp_model),
+                return_exceptions=True,
             )
-            def _first_int(raw: dict) -> int | None:
+
+            def _first_int(raw) -> int | None:
+                if isinstance(raw, Exception) or not raw:
+                    return None
                 for v in raw.values():
                     try:
                         return int(v)
                     except (ValueError, TypeError):
                         pass
                 return None
+
             system["poe_budget_watts"] = _first_int(poe_budget_raw)
             system["poe_consumed_watts"] = _first_int(poe_consumed_raw)
+
+            # Parse ENTITY-SENSOR-MIB walks: OID suffix is the entity index
+            def _ent_parse(raw) -> dict[int, str]:
+                if isinstance(raw, Exception) or not raw:
+                    return {}
+                out = {}
+                for oid, val in raw.items():
+                    try:
+                        out[int(oid.split(".")[-1])] = val
+                    except (ValueError, IndexError):
+                        continue
+                return out
+
+            ent_types = _ent_parse(ent_type_raw)
+            ent_values = _ent_parse(ent_value_raw)
+            ent_opstatus = _ent_parse(ent_opstatus_raw)
+            ent_names = _ent_parse(ent_name_raw)
+
+            # Temperature: entPhySensorType == 8 (celsius, RFC 3433 §4).
+            # Assumes scale=units and precision=0 — standard for switch thermal sensors.
+            temperature_celsius = None
+            for entity_id, sensor_type in ent_types.items():
+                try:
+                    if int(sensor_type) == 8:
+                        raw_val = ent_values.get(entity_id)
+                        if raw_val is not None:
+                            temperature_celsius = float(raw_val)
+                            break
+                except (ValueError, TypeError):
+                    continue
+
+            # Fans: entPhySensorType == 1 (other — used by HP/Aruba fans) or 10 (rpm).
+            # Use entPhySensorOperStatus: 1=ok, 2=unavailable.
+            fans = []
+            for entity_id, sensor_type in sorted(ent_types.items()):
+                try:
+                    if int(sensor_type) in (1, 10):
+                        op_status = int(ent_opstatus.get(entity_id, 0))
+                        fan_name = str(ent_names.get(entity_id, f"Fan {entity_id}"))
+                        fans.append({
+                            "entity_id": entity_id,
+                            "name": fan_name,
+                            "oper_status": op_status,
+                            "ok": op_status == 1,
+                        })
+                except (ValueError, TypeError):
+                    continue
+
+            system["temperature_celsius"] = temperature_celsius
+            system["fans"] = fans
 
             return SwitchPortData(ports=ports_data, bandwidth_mbps=bandwidth_mbps, system=system)
 
@@ -832,6 +899,59 @@ class SystemHostnameSensor(SwitchPortBaseEntity):
             return ""
 
 
+class TemperatureSensor(SwitchPortBaseEntity):
+    """Switch temperature from ENTITY-SENSOR-MIB (RFC 3433), entPhySensorType=8 (celsius)."""
+    _attr_name = "Temperature"
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:thermometer"
+
+    def __init__(self, coordinator: SwitchPortCoordinator, entry_id: str) -> None:
+        super().__init__(coordinator, entry_id)
+        self._attr_unique_id = f"{entry_id}_temperature"
+
+    @property
+    def native_value(self) -> float | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.system.get("temperature_celsius")
+
+
+class FanStatusSensor(SwitchPortBaseEntity):
+    """Aggregate fan status from ENTITY-SENSOR-MIB (RFC 3433), entPhySensorType=1/10.
+
+    State: "ok" (all fans ok), "degraded" (some not ok), "unavailable" (none reporting ok).
+    Per-fan detail exposed as attributes.
+    """
+    _attr_name = "Fan Status"
+    _attr_icon = "mdi:fan"
+
+    def __init__(self, coordinator: SwitchPortCoordinator, entry_id: str) -> None:
+        super().__init__(coordinator, entry_id)
+        self._attr_unique_id = f"{entry_id}_fan_status"
+
+    @property
+    def native_value(self) -> str | None:
+        if not self.coordinator.data:
+            return None
+        fans = self.coordinator.data.system.get("fans", [])
+        if not fans:
+            return None
+        if all(f["oper_status"] == 1 for f in fans):
+            return "ok"
+        if any(f["oper_status"] == 1 for f in fans):
+            return "degraded"
+        return "unavailable"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
+        fans = self.coordinator.data.system.get("fans", [])
+        return {f["name"]: "ok" if f["ok"] else "unavailable" for f in fans}
+
+
 # =============================================================================
 # Setup
 # =============================================================================
@@ -854,6 +974,8 @@ async def async_setup_entry(
         SystemMemorySensor(coordinator, entry.entry_id),
         SystemUptimeSensor(coordinator, entry.entry_id),
         SystemHostnameSensor(coordinator, entry.entry_id),
+        TemperatureSensor(coordinator, entry.entry_id),
+        FanStatusSensor(coordinator, entry.entry_id),
     ]
 
     # Per-port status sensors (traffic/speed data lives in attributes)
