@@ -26,6 +26,7 @@ CONF_OID_DOT1D_BASE_PORT_IFINDEX: Final = "1.3.6.1.2.1.17.1.4.1.2"  # bridge por
 CONF_OID_PORT_CUSTOM: Final = "oid_port_custom"
 CONF_OID_CPU: Final = "oid_cpu"
 CONF_OID_MEMORY: Final = "oid_memory"
+CONF_OID_MEMORY_TOTAL: Final = "oid_memory_total"
 CONF_OID_FIRMWARE: Final = "oid_firmware"
 CONF_OID_HOSTNAME: Final = "oid_hostname"
 CONF_OID_UPTIME: Final = "oid_uptime"
@@ -62,7 +63,8 @@ DEFAULT_BASE_OIDS: Final = {
 # Default system-level OIDs (most common working ones)
 DEFAULT_SYSTEM_OIDS: Final = {
     "cpu": "",                           # Usually private — user sets
-    "memory": "",                        # Usually private
+    "memory": "",                        # Usually private (used bytes if memory_total set, else %)
+    "memory_total": "",                  # Optional: total bytes; if set, memory% = (memory/memory_total)*100
     "firmware": "",                      # Usually private
     "hostname": "1.3.6.1.2.1.1.5.0",     # sysName — works everywhere
     "uptime": "1.3.6.1.2.1.1.3.0",       # sysUpTime — universal

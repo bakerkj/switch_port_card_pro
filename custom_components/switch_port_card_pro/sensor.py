@@ -259,9 +259,19 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 oid = self.system_oids.get(oid_key)
                 return next((v for k, v in raw_system.items() if oid and k.startswith(oid)), None)
 
+            memory_raw = get("memory")
+            memory_total_raw = get("memory_total")
+            if memory_raw is not None and memory_total_raw is not None:
+                try:
+                    memory_value = round(float(memory_raw) / float(memory_total_raw) * 100, 1) if float(memory_total_raw) > 0 else None
+                except (ValueError, TypeError):
+                    memory_value = memory_raw
+            else:
+                memory_value = memory_raw
+
             system = {
                 "cpu": get("cpu"),
-                "memory": get("memory"),
+                "memory": memory_value,
                 "hostname": get("hostname"),
                 "uptime": get("uptime"),
                 "firmware": get("firmware"),
