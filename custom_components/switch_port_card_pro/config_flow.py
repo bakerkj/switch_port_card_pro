@@ -109,17 +109,19 @@ class SwitchPortCardProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def _test_connection(self, hass: HomeAssistant, host: str, community: str, snmp_port: int) -> None:
-      """SNMP connectivity test direct await, no executor nonsense."""
-      await async_snmp_get(
-        hass,
-        host,
-        community,
-        snmp_port,  
-        CONF_OID_SYSNAME,
-        timeout=12,
-        retries=3,
-        mp_model=1,            # v2c
-      )
+        """Test SNMP connectivity by fetching sysName. Raises ConnectionError if unreachable."""
+        result = await async_snmp_get(
+            hass,
+            host,
+            community,
+            snmp_port,
+            CONF_OID_SYSNAME,
+            timeout=12,
+            retries=3,
+            mp_model=1,  # v2c
+        )
+        if result is None:
+            raise ConnectionError(f"No SNMP response from {host}:{snmp_port}")
 
     @staticmethod
     @callback
