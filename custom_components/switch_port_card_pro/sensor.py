@@ -129,6 +129,50 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             poe_class_data = parse(walk_map.get("poe_class", {}))
             port_custom = parse(walk_map.get("port_custom", {}))
 
+            def _port_in_bitmap(raw_value: str, bridge_port: int) -> bool:
+                """Return True if bridge_port (1-indexed) bit is set in an SNMP OctetString bitmap."""
+                try:
+                    hex_str = raw_value.replace(" ", "")
+                    if hex_str.startswith(("0x", "0X")):
+                        hex_str = hex_str[2:]
+                    bitmap_bytes = bytes.fromhex(hex_str)
+                    byte_index = (bridge_port - 1) // 8
+                    bit_index = 7 - ((bridge_port - 1) % 8)
+                    return byte_index < len(bitmap_bytes) and bool((bitmap_bytes[byte_index] >> bit_index) & 1)
+                except Exception:
+                    return False
+
+            # Build if_index → bridge_port mapping and fetch per-VLAN egress bitmaps in parallel.
+            # dot1qPvid is indexed by dot1dBasePort (RFC 4363), not ifIndex.
+            ifindex_to_bridge_port: dict[int, int] = {}
+            vlan_egress_bitmaps: dict[int, str] = {}
+            if self.include_vlans and self.base_oids.get("vlan"):
+                bridge_walk, egress_walk = await asyncio.gather(
+                    async_snmp_walk(
+                        self.hass, self.host, self.community, self.snmp_port,
+                        "1.3.6.1.2.1.17.1.4.1.2",      # dot1dBasePortIfIndex (RFC 4188)
+                        mp_model=self.mp_model,
+                    ),
+                    async_snmp_walk(
+                        self.hass, self.host, self.community, self.snmp_port,
+                        "1.3.6.1.2.1.17.7.1.4.2.1.4",  # dot1qVlanCurrentEgressPorts (RFC 4363)
+                        mp_model=self.mp_model,
+                    ),
+                )
+                for b_oid, b_val in bridge_walk.items():
+                    try:
+                        b_port = int(b_oid.split(".")[-1])
+                        b_ifidx = int(b_val)
+                        ifindex_to_bridge_port[b_ifidx] = b_port
+                    except (ValueError, IndexError):
+                        continue
+                for e_oid, e_val in egress_walk.items():
+                    try:
+                        vlan_id = int(e_oid.split(".")[-1])
+                        vlan_egress_bitmaps[vlan_id] = e_val
+                    except (ValueError, IndexError):
+                        continue
+
             ports_data: dict[str, dict[str, Any]] = {}
             total_rx = total_tx = total_poe_mw = 0
 
@@ -143,13 +187,20 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     "tx": 0,
                     "name": f"Port {port}",
                     "vlan": None,
+                    "vlan_id_list": [],
                     "poe_power": 0,
                     "poe_status": 0,
                     "poe_class": None,
                     "port_custom": 0,
                 }
 
-                # Use the real if_index for all lookups
+                # For VLAN: dot1qPvid is indexed by bridge port, not ifIndex (RFC 4363).
+                vlan_bridge_port = ifindex_to_bridge_port.get(if_index, if_index)
+                vlan_id_list = sorted(
+                    vid for vid, bitmap in vlan_egress_bitmaps.items()
+                    if _port_in_bitmap(bitmap, vlan_bridge_port)
+                ) if vlan_egress_bitmaps else []
+
                 if any(if_index in t for t in (status, speed, rx, tx, poe_power)):
                     HighLowSpeed = speed.get(if_index, 0)
                     if HighLowSpeed < 100000: # check if we use the 32 or 64 bit variant
@@ -160,7 +211,8 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                         "rx": rx.get(if_index, 0),
                         "tx": tx.get(if_index, 0),
                         "name": name.get(if_index, f"Port {port}"),
-                        "vlan": vlan.get(if_index),
+                        "vlan": vlan.get(vlan_bridge_port),
+                        "vlan_id_list": vlan_id_list,
                         "poe_power": poe_power.get(if_index, 0),
                         "poe_status": poe_status.get(if_index, 0),
                         "poe_class": poe_class_data.get(if_index),
@@ -488,8 +540,11 @@ class PortStatusSensor(SwitchPortBaseEntity):
                 "interface": port_info.get("if_descr"),  # e.g. "eth5"
                 "custom": p.get("port_custom"),
             }
-            if self.coordinator.include_vlans and p.get("vlan") is not None:
-                attrs["vlan_id"] = p["vlan"]
+            if self.coordinator.include_vlans:
+                if p.get("vlan") is not None:
+                    attrs["vlan_id"] = p["vlan"]
+                if p.get("vlan_id_list"):
+                    attrs["vlan_id_list"] = p["vlan_id_list"]
             if has_poe:
                 attrs.update({
                     "poe_power_watts": round(p.get("poe_power", 0) / 1000.0, 2),

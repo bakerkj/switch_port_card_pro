@@ -22,6 +22,7 @@ CONF_OID_POE_POWER: Final = "oid_poe_power"
 CONF_OID_POE_STATUS: Final = "oid_poe_status"
 CONF_OID_POE_CLASS: Final = "oid_poe_class"
 CONF_OID_CUSTOM: Final = "oid_custom"
+CONF_OID_DOT1D_BASE_PORT_IFINDEX: Final = "1.3.6.1.2.1.17.1.4.1.2"  # bridge port → ifIndex
 CONF_OID_PORT_CUSTOM: Final = "oid_port_custom"
 CONF_OID_CPU: Final = "oid_cpu"
 CONF_OID_MEMORY: Final = "oid_memory"
