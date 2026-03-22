@@ -30,6 +30,7 @@
           "update_interval": "Update-interval (seconden)",
           "ports": "Te monitoren poorten",
           "re_detect_ports": "Poortdetectie opnieuw uitvoeren bij opslaan (overschrijft poortlijst)",
+          "include_vlans": "VLAN-monitoring inschakelen (uitschakelen om VLAN-walks over te slaan)",
           "oid_rx": "RX-teller OID (voor live RX-berekening)",
           "oid_tx": "TX-teller OID (voor live TX-berekening)",
           "oid_status": "Poortstatus OID (bepaalt aan/uit)",

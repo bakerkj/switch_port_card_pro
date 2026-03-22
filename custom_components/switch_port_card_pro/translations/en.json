@@ -30,6 +30,7 @@
           "update_interval": "Update Interval (seconds)",
           "ports": "Ports to Monitor",
           "re_detect_ports": "Re-run port detection on save (overwrites port list)",
+          "include_vlans": "Enable VLAN monitoring (disable to skip VLAN walks)",
           "oid_rx": "Life-time RX Counter OID (for live RX calculation)",
           "oid_tx": "Life-time TX Counter OID (for live TX calculation)",
           "oid_status": "Port Status OID (determines on/off state)",

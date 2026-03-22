@@ -30,6 +30,7 @@
           "update_interval": "Aktualisierungsintervall (Sekunden)",
           "ports": "Zu überwachende Ports",
           "re_detect_ports": "Port-Erkennung beim Speichern erneut ausführen (überschreibt Port-Liste)",
+          "include_vlans": "VLAN-Überwachung aktivieren (deaktivieren um VLAN-Abfragen zu überspringen)",
           "oid_rx": "RX-Zähler OID (für Live-RX-Berechnung)",
           "oid_tx": "TX-Zähler OID (für Live-TX-Berechnung)",
           "oid_status": "Port-Status OID (bestimmt Ein/Aus)",

@@ -81,7 +81,7 @@ class SwitchPortCardProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     },
                     options={
     #                    CONF_PORTS: DEFAULT_PORTS, # removed for auto port detection
-    #                    CONF_INCLUDE_VLANS: True,
+                        CONF_INCLUDE_VLANS: True,
                         "snmp_version": "v2c",
                         "oid_rx": DEFAULT_BASE_OIDS["rx"],
                         "oid_tx": DEFAULT_BASE_OIDS["tx"],
@@ -227,10 +227,10 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                     default=False,
                 ): cv.boolean,
                 
- #               vol.Optional(
- #                   CONF_INCLUDE_VLANS,
- #                   default=current.get(CONF_INCLUDE_VLANS, True),
- #               ): cv.boolean,
+                vol.Optional(
+                    CONF_INCLUDE_VLANS,
+                    default=current.get(CONF_INCLUDE_VLANS, True),
+                ): cv.boolean,
                 
                 # --- Port OIDs ---
                 vol.Optional(
