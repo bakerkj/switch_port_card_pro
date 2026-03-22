@@ -29,8 +29,13 @@ from homeassistant.helpers.update_coordinator import (
 from .const import (
     DOMAIN,
     SNMP_VERSION_TO_MP_MODEL,
+    HP_OID_CPU_5MIN,
+    HP_OID_MEMORY_USED,
+    HP_OID_MEMORY_TOTAL,
+    HP_MANUFACTURER_KEYWORDS,
 )
 from .snmp_helper import (
+    async_snmp_get,
     async_snmp_walk,
     async_snmp_bulk,
 )
@@ -278,6 +283,33 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 "poe_total_watts": round(total_poe_mw / 1000.0, 2) if total_poe_mw > 0 else None,
                 "custom": get("custom"),
             }
+
+            # HP/Aruba auto-detection: fill in cpu/memory if not manually configured
+            manufacturer = getattr(self, "manufacturer", "").lower()
+            if any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS):
+                if not self.system_oids.get("cpu") and system.get("cpu") is None:
+                    hp_cpu = await async_snmp_get(
+                        self.hass, self.host, self.community, self.snmp_port,
+                        HP_OID_CPU_5MIN, mp_model=self.mp_model,
+                    )
+                    if hp_cpu is not None:
+                        system["cpu"] = hp_cpu
+                if not self.system_oids.get("memory") and system.get("memory") is None:
+                    hp_used, hp_total = await asyncio.gather(
+                        async_snmp_get(
+                            self.hass, self.host, self.community, self.snmp_port,
+                            HP_OID_MEMORY_USED, mp_model=self.mp_model,
+                        ),
+                        async_snmp_get(
+                            self.hass, self.host, self.community, self.snmp_port,
+                            HP_OID_MEMORY_TOTAL, mp_model=self.mp_model,
+                        ),
+                    )
+                    if hp_used is not None and hp_total is not None:
+                        try:
+                            system["memory"] = round(float(hp_used) / float(hp_total) * 100, 1) if float(hp_total) > 0 else None
+                        except (ValueError, TypeError):
+                            pass
 
             return SwitchPortData(ports=ports_data, bandwidth_mbps=bandwidth_mbps, system=system)
 
