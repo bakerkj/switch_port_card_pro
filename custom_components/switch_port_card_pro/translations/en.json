@@ -19,6 +19,11 @@
           "snmp_port": "SNMP Port"
         }
       }
+    },
+    "error": {
+      "cannot_connect": "Unable to reach the switch. Check the IP address, SNMP port, and community string.",
+      "invalid_community": "Invalid SNMP community string.",
+      "unknown": "Unexpected error. Check the logs for details."
     }
   },
   "options": {
@@ -37,16 +42,18 @@
           "oid_speed": "Port Speed OID (10M/100M/1G/etc. detection)",
           "oid_name": "Port Name OID (user-assigned port names)",
           "oid_vlan": "VLAN ID OID (port VLAN assignment)",
-          "oid_cpu": "CPU Load OID (percentage)",
-          "oid_firmware": "Firmware Version OID (text string)",
-          "oid_memory": "Memory Usage OID (percentage)",
-          "oid_hostname": "Hostname/Model OID (device identification)",
-          "oid_uptime": "Uptime OID (seconds, converted to D:H:M)",
           "oid_poe_power": "PoE Power OID (per-port power in mW)",
           "oid_poe_status": "PoE Status OID (per-port PoE state)",
-          "oid_custom": "Custom OID (displayed in system info box)",
+          "oid_poe_class": "PoE Class OID (per-port, 802.3af/at class)",
           "oid_port_custom": "Port Custom OID (per port)",
-          "snmp_version": "SNMP protocol Version"
+          "oid_cpu": "CPU Load OID (percentage)",
+          "oid_memory": "Memory Usage OID (used bytes, or percentage if memory total is blank)",
+          "oid_memory_total": "Memory Total OID (total bytes; enables used/total % calculation)",
+          "oid_firmware": "Firmware Version OID (text string)",
+          "oid_hostname": "Hostname/Model OID (device identification)",
+          "oid_uptime": "Uptime OID (seconds, converted to D:H:M)",
+          "oid_custom": "Custom OID (displayed in system info box)",
+          "snmp_version": "SNMP Protocol Version"
         }
       }
     }

@@ -19,6 +19,11 @@
           "snmp_port": "SNMP-poort"
         }
       }
+    },
+    "error": {
+      "cannot_connect": "Switch niet bereikbaar. Controleer het IP-adres, de SNMP-poort en de community-string.",
+      "invalid_community": "Ongeldige SNMP community-string.",
+      "unknown": "Onverwachte fout. Controleer de logs voor meer informatie."
     }
   },
   "options": {
@@ -37,15 +42,17 @@
           "oid_speed": "Poortsnelheid OID (10M/100M/1G/10G detectie)",
           "oid_name": "Poortnaam OID (door gebruiker ingestelde namen)",
           "oid_vlan": "VLAN ID OID (poort-VLAN)",
+          "oid_poe_power": "PoE-vermogen OID (per poort, in mW)",
+          "oid_poe_status": "PoE-status OID (per poort)",
+          "oid_poe_class": "PoE-klasse OID (per poort, 802.3af/at klasse)",
+          "oid_port_custom": "Poort vrije OID (per poort)",
           "oid_cpu": "CPU-gebruik OID (moet percentage teruggeven)",
+          "oid_memory": "Geheugengebruik OID (gebruikte bytes of percentage)",
+          "oid_memory_total": "Totaal geheugen OID (bytes totaal; activeert used/total-%-berekening)",
           "oid_firmware": "Firmwareversie OID (tekst)",
-          "oid_memory": "Geheugengebruik OID (moet percentage teruggeven)",
           "oid_hostname": "Hostname/Model OID (apparaatidentificatie)",
           "oid_uptime": "Uptime OID (seconden → omgerekend naar D:U:M)",
-          "oid_poe_power": "PoE-vermogen OID (per poort in mW)",
-          "oid_poe_status": "PoE-status OID (per poort)",
           "oid_custom": "Vrije OID (wordt getoond in systeeminfo)",
-          "oid_port_custom": "Poort vrije OID (per poort)",
           "snmp_version": "SNMP-versie"
         }
       }

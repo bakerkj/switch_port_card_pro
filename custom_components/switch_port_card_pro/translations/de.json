@@ -19,6 +19,11 @@
           "snmp_port": "SNMP-Port"
         }
       }
+    },
+    "error": {
+      "cannot_connect": "Switch nicht erreichbar. IP-Adresse, SNMP-Port und Community-String prüfen.",
+      "invalid_community": "Ungültiger SNMP-Community-String.",
+      "unknown": "Unerwarteter Fehler. Bitte Logs prüfen."
     }
   },
   "options": {
@@ -37,15 +42,17 @@
           "oid_speed": "Port-Geschwindigkeit OID (10M/100M/1G/10G Erkennung)",
           "oid_name": "Port-Name OID (benutzerdefinierte Namen)",
           "oid_vlan": "VLAN-ID OID (Port-VLAN)",
+          "oid_poe_power": "PoE-Leistung OID (pro Port, in mW)",
+          "oid_poe_status": "PoE-Status OID (pro Port)",
+          "oid_poe_class": "PoE-Klasse OID (pro Port, 802.3af/at-Klasse)",
+          "oid_port_custom": "Port Benutzerdefinierte OID (pro Port)",
           "oid_cpu": "CPU-Last OID (muss Prozentwert liefern)",
+          "oid_memory": "Speicherauslastung OID (verwendete Bytes oder Prozent)",
+          "oid_memory_total": "Gesamtspeicher OID (Bytes gesamt; aktiviert used/total-%-Berechnung)",
           "oid_firmware": "Firmware-Version OID (Text)",
-          "oid_memory": "Speicherauslastung OID (muss Prozentwert liefern)",
           "oid_hostname": "Hostname/Model OID (Geräteidentifikation)",
           "oid_uptime": "Laufzeit OID (Sekunden → umgerechnet in T:Std:Min)",
-          "oid_poe_power": "PoE-Leistung OID (pro Port in mW)",
-          "oid_poe_status": "PoE-Status OID (pro Port)",
           "oid_custom": "Benutzerdefinierte OID (wird im System-Info-Bereich angezeigt)",
-          "oid_port_custom": "Port Benutzerdefinierte OID (pro Port)",
           "snmp_version": "SNMP-Version"
         }
       }
