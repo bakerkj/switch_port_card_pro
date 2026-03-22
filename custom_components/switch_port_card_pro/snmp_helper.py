@@ -358,11 +358,10 @@ async def discover_physical_ports(
         )
         _LOGGER.debug("MAU-MIB data from %s: %d entries", host, len(mau_data))
         
-        # Step 4: Get sysDescr for manufacturer info
-        sys_descr_data = await async_snmp_walk(
+        # Step 4: Get sysDescr for manufacturer info (scalar OID — use GET not WALK)
+        sys_descr = await async_snmp_get(
             hass, host, community, snmp_port, CONF_OID_SYSDESCR, mp_model=mp_model
-        )
-        sys_descr = list(sys_descr_data.values())[0] if sys_descr_data else "Unknown"
+        ) or "Unknown"
         _LOGGER.debug("sysDescr from %s: %s", host, sys_descr)
         
         # Extract manufacturer from sysDescr

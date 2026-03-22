@@ -350,17 +350,21 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 "custom": get("custom"),
             }
 
-            # HP/Aruba auto-detection: fill in cpu/memory if not manually configured
+            # HP/Aruba auto-detection: fill in cpu/memory if not manually configured.
+            # Also attempt when manufacturer is unknown (handles entries created before
+            # manufacturer detection was added — OIDs return None on non-HP switches).
             manufacturer = getattr(self, "manufacturer", "").lower()
-            if any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS):
-                if not self.system_oids.get("cpu") and system.get("cpu") is None:
+            is_hp = any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS)
+            is_unknown_manufacturer = not manufacturer or manufacturer == "unknown"
+            if is_hp or is_unknown_manufacturer:
+                if not self.system_oids.get("cpu", "").strip() and system.get("cpu") is None:
                     hp_cpu = await async_snmp_get(
                         self.hass, self.host, self.community, self.snmp_port,
                         HP_OID_CPU_5MIN, mp_model=self.mp_model,
                     )
                     if hp_cpu is not None:
                         system["cpu"] = hp_cpu
-                if not self.system_oids.get("memory") and system.get("memory") is None:
+                if not self.system_oids.get("memory", "").strip() and system.get("memory") is None:
                     hp_used, hp_total = await asyncio.gather(
                         async_snmp_get(
                             self.hass, self.host, self.community, self.snmp_port,
