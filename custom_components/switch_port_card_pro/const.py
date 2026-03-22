@@ -49,6 +49,8 @@ CONF_OID_IFOUTDISCARDS: Final = "1.3.6.1.2.1.2.2.1.19"     # ifOutDiscards
 CONF_OID_IFADMINSTATUS: Final = "1.3.6.1.2.1.2.2.1.7"      # ifAdminStatus (1=up, 2=down, 3=testing)
 CONF_OID_IFLASTCHANGE: Final = "1.3.6.1.2.1.2.2.1.9"       # ifLastChange (TimeTicks at last state change)
 CONF_OID_SYSUPTIME: Final = "1.3.6.1.2.1.1.3.0"            # sysUpTime (TimeTicks since boot)
+CONF_OID_POE_BUDGET_TOTAL: Final = "1.3.6.1.2.1.105.1.3.1.1.2"    # pethMainPsePower (watts)
+CONF_OID_POE_BUDGET_CONSUMED: Final = "1.3.6.1.2.1.105.1.3.1.1.3" # pethMainPseConsumptionPower (watts)
 CONF_OID_SYSDESCR: Final = "1.3.6.1.2.1.1.1.0"
 CONF_OID_SYSNAME: Final = "1.3.6.1.2.1.1.5.0"
 CONF_OID_IFMAUTYPE: Final = "1.3.6.1.2.1.26.2.1.1.3"  # MAU-MIB ifMauType (RFC 4836)
