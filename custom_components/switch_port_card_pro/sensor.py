@@ -87,7 +87,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     for p in self.ports
                 }   
             # === PORT WALKS ===
-            oids_to_walk = ["rx", "tx", "status", "speed", "name", "poe_power", "poe_status","port_custom"]
+            oids_to_walk = ["rx", "tx", "status", "speed", "name", "poe_power", "poe_status", "poe_class", "port_custom"]
             if self.include_vlans and self.base_oids.get("vlan"):
                 oids_to_walk.append("vlan")
 
@@ -126,6 +126,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             vlan = parse(walk_map.get("vlan", {}))
             poe_power = parse(walk_map.get("poe_power", {}))
             poe_status = parse(walk_map.get("poe_status", {}))
+            poe_class_data = parse(walk_map.get("poe_class", {}))
             port_custom = parse(walk_map.get("port_custom", {}))
 
             ports_data: dict[str, dict[str, Any]] = {}
@@ -144,6 +145,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     "vlan": None,
                     "poe_power": 0,
                     "poe_status": 0,
+                    "poe_class": None,
                     "port_custom": 0,
                 }
 
@@ -161,6 +163,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                         "vlan": vlan.get(if_index),
                         "poe_power": poe_power.get(if_index, 0),
                         "poe_status": poe_status.get(if_index, 0),
+                        "poe_class": poe_class_data.get(if_index),
                         "port_custom": port_custom.get(if_index, 0),
                     })
 
@@ -491,7 +494,7 @@ class PortStatusSensor(SwitchPortBaseEntity):
                 attrs.update({
                     "poe_power_watts": round(p.get("poe_power", 0) / 1000.0, 2),
                     "poe_enabled": p.get("poe_status") == 3,
-                    "poe_class": p.get("poe_status"),
+                    "poe_class": p.get("poe_class"),
                 })
             return attrs
         except Exception as e:

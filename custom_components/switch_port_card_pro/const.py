@@ -20,6 +20,7 @@ CONF_OID_NAME: Final = "oid_name"
 CONF_OID_VLAN: Final = "oid_vlan"
 CONF_OID_POE_POWER: Final = "oid_poe_power"
 CONF_OID_POE_STATUS: Final = "oid_poe_status"
+CONF_OID_POE_CLASS: Final = "oid_poe_class"
 CONF_OID_CUSTOM: Final = "oid_custom"
 CONF_OID_PORT_CUSTOM: Final = "oid_port_custom"
 CONF_OID_CPU: Final = "oid_cpu"
@@ -53,6 +54,7 @@ DEFAULT_BASE_OIDS: Final = {
     "vlan": "",                          # User must set per-brand (e.g. Q-BRIDGE-MIB or private)
     "poe_power": "",                     # User must set (common: Cisco/Zyxel/TP-Link)
     "poe_status": "",                    # User must set
+    "poe_class": "",                     # 802.3af/at class (1=class0…5=class4). Standard: 1.3.6.1.2.1.105.1.1.1.10
     "port_custom": "",                   # User must set
 }
 
