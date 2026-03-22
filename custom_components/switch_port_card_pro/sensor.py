@@ -490,7 +490,7 @@ class PortStatusSensor(SwitchPortBaseEntity):
             if has_poe:
                 attrs.update({
                     "poe_power_watts": round(p.get("poe_power", 0) / 1000.0, 2),
-                    "poe_enabled": p.get("poe_status") in (1, 2, 4),
+                    "poe_enabled": p.get("poe_status") == 3,
                     "poe_class": p.get("poe_status"),
                 })
             return attrs
