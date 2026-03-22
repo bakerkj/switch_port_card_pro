@@ -25,6 +25,7 @@ from .const import (
     CONF_SNMP_PORT,
     DEFAULT_SNMP_PORT,
     CONF_OID_SYSNAME,
+    CONF_INCLUDE_VLANS,
 )
 
 _LOGGER = logging.getLogger(__name__)
