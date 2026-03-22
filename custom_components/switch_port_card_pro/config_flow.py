@@ -194,6 +194,16 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
         """Handle options."""
         current = self.config_entry.options
 
+        def valid_oid(value: str) -> str:
+            """Accept blank or a dotted-numeric OID string."""
+            stripped = value.strip() if value else ""
+            if not stripped:
+                return ""
+            import re
+            if not re.fullmatch(r"\d+(\.\d+)*", stripped):
+                raise vol.Invalid(f"Invalid OID format: '{value}'. Use dotted numeric notation (e.g. 1.3.6.1.2.1.1.1.0) or leave blank.")
+            return stripped
+
         if user_input is not None:
             # Convert port strings (from multi-select) to integers for saving
             if CONF_PORTS in user_input and isinstance(user_input[CONF_PORTS], list):
@@ -237,73 +247,73 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     "oid_rx",
                     default=current.get("oid_rx", DEFAULT_BASE_OIDS["rx"]),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_tx",
                     default=current.get("oid_tx", DEFAULT_BASE_OIDS["tx"]),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_status",
                     default=current.get("oid_status", DEFAULT_BASE_OIDS["status"]),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_speed",
                     default=current.get("oid_speed", DEFAULT_BASE_OIDS["speed"]),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_name",
                     default=current.get("oid_name", DEFAULT_BASE_OIDS.get("name", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_vlan",
                     default=current.get("oid_vlan", DEFAULT_BASE_OIDS.get("vlan", "")),
-                ): cv.string,
+                ): valid_oid,
 
                 # --- System OIDs ---
                 vol.Optional(
                     "oid_cpu",
                     default=current.get("oid_cpu", DEFAULT_SYSTEM_OIDS.get("cpu", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_firmware",
                     default=current.get("oid_firmware", DEFAULT_SYSTEM_OIDS.get("firmware", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_memory",
                     default=current.get("oid_memory", DEFAULT_SYSTEM_OIDS.get("memory", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_memory_total",
                     default=current.get("oid_memory_total", DEFAULT_SYSTEM_OIDS.get("memory_total", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_hostname",
                     default=current.get("oid_hostname", DEFAULT_SYSTEM_OIDS.get("hostname", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_uptime",
                     default=current.get("oid_uptime", DEFAULT_SYSTEM_OIDS.get("uptime", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_poe_power",
                     default=current.get("oid_poe_power", DEFAULT_SYSTEM_OIDS.get("poe_power", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_poe_status",
                     default=current.get("oid_poe_status", DEFAULT_SYSTEM_OIDS.get("poe_status", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_poe_class",
                     default=current.get("oid_poe_class", DEFAULT_BASE_OIDS.get("poe_class", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_custom",
                     default=current.get("oid_custom", DEFAULT_SYSTEM_OIDS.get("custom", "")),
-                ): cv.string,
+                ): valid_oid,
                 vol.Optional(
                     "oid_port_custom",
                     default=current.get("oid_port_custom", DEFAULT_SYSTEM_OIDS.get("port_custom", "")),
-                ): cv.string,   
+                ): valid_oid,
                 vol.Optional(
                     "snmp_version",
                     default=current.get("snmp_version", "v2c"),
