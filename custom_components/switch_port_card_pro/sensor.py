@@ -44,7 +44,6 @@ from .const import (
     CONF_OID_IFLASTCHANGE,
     CONF_OID_SYSUPTIME,
     CONF_OID_POE_BUDGET_TOTAL,
-    CONF_OID_POE_BUDGET_CONSUMED,
     CONF_OID_ENT_SENSOR_TYPE,
     CONF_OID_ENT_SENSOR_VALUE,
     CONF_OID_ENT_SENSOR_OPSTATUS,
@@ -380,11 +379,10 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
 
             # PoE budget (RFC 3621) + ENTITY-SENSOR-MIB (RFC 3433) — all in parallel
             (
-                poe_budget_raw, poe_consumed_raw,
+                poe_budget_raw,
                 ent_type_raw, ent_value_raw, ent_opstatus_raw, ent_name_raw,
             ) = await asyncio.gather(
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_POE_BUDGET_TOTAL, mp_model=self.mp_model),
-                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_POE_BUDGET_CONSUMED, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_TYPE, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_VALUE, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_OPSTATUS, mp_model=self.mp_model),
@@ -403,7 +401,6 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 return None
 
             system["poe_budget_watts"] = _first_int(poe_budget_raw)
-            system["poe_consumed_watts"] = _first_int(poe_consumed_raw)
 
             # Parse ENTITY-SENSOR-MIB walks: OID suffix is the entity index
             def _ent_parse(raw) -> dict[int, str]:
@@ -586,25 +583,6 @@ class PoEBudgetTotalSensor(SwitchPortBaseEntity):
         if not self.coordinator.data:
             return None
         return self.coordinator.data.system.get("poe_budget_watts")
-
-
-class PoEBudgetConsumedSensor(SwitchPortBaseEntity):
-    """Current PoE power consumption from pethMainPseConsumptionPower (RFC 3621)."""
-    _attr_name = "PoE Budget Consumed"
-    _attr_native_unit_of_measurement = "W"
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:lightning-bolt-circle"
-
-    def __init__(self, coordinator: SwitchPortCoordinator, entry_id: str) -> None:
-        super().__init__(coordinator, entry_id)
-        self._attr_unique_id = f"{entry_id}_poe_budget_consumed"
-
-    @property
-    def native_value(self) -> float | None:
-        if not self.coordinator.data:
-            return None
-        return self.coordinator.data.system.get("poe_consumed_watts")
 
 
 class BandwidthSensor(SwitchPortBaseEntity):
@@ -967,7 +945,6 @@ async def async_setup_entry(
         BandwidthSensor(coordinator, entry.entry_id),
         TotalPoESensor(coordinator, entry.entry_id),
         PoEBudgetTotalSensor(coordinator, entry.entry_id),
-        PoEBudgetConsumedSensor(coordinator, entry.entry_id),
         SystemCpuSensor(coordinator, entry.entry_id),
         CustomValueSensor(coordinator, entry.entry_id),
         FirmwareSensor(coordinator, entry.entry_id),
