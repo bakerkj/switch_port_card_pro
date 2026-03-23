@@ -33,6 +33,11 @@ from .const import (
     HP_OID_CPU_5MIN,
     HP_OID_MEMORY_USED,
     HP_OID_MEMORY_TOTAL,
+    HP_OID_POE_POWER,
+    HP_OID_POE_POWER_LEGACY,
+    HP_OID_POE_STATUS,
+    HP_OID_POE_CLASS,
+    HP_OID_FIRMWARE,
     HP_MANUFACTURER_KEYWORDS,
     CONF_OID_IFHCINOCTETS,
     CONF_OID_IFHCOUTOCTETS,
@@ -145,6 +150,27 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     walk_map[key] = {}
                 else:
                     walk_map[key] = result
+
+            # HP PoE auto-detection: fill in missing PoE walk results when OIDs are not manually configured.
+            manufacturer = getattr(self, "manufacturer", "").lower()
+            is_hp = any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS)
+            is_unknown_manufacturer = not manufacturer or manufacturer == "unknown"
+            if is_hp or is_unknown_manufacturer:
+                hp_poe_keys: list[str] = []
+                hp_poe_tasks = []
+                for key, oid in (("poe_power", HP_OID_POE_POWER), ("poe_status", HP_OID_POE_STATUS), ("poe_class", HP_OID_POE_CLASS)):
+                    if not self.base_oids.get(key, "").strip():
+                        hp_poe_keys.append(key)
+                        hp_poe_tasks.append(async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, oid, mp_model=self.mp_model))
+                if hp_poe_tasks:
+                    hp_poe_results = await asyncio.gather(*hp_poe_tasks, return_exceptions=True)
+                    for key, result in zip(hp_poe_keys, hp_poe_results):
+                        walk_map[key] = result if not isinstance(result, Exception) and result else {}
+                # Older HP switches (e.g. 2520) use column 3 for mW instead of column 8 — fall back if primary returned empty.
+                if not walk_map.get("poe_power") and not self.base_oids.get("poe_power", "").strip():
+                    legacy = await async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, HP_OID_POE_POWER_LEGACY, mp_model=self.mp_model)
+                    if legacy:
+                        walk_map["poe_power"] = legacy
 
             def parse(raw: dict[str, str], int_val: bool = True) -> dict[int, Any]:
                 out = {}
@@ -350,12 +376,10 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 "custom": get("custom"),
             }
 
-            # HP/Aruba auto-detection: fill in cpu/memory if not manually configured.
+            # HP/Aruba auto-detection: fill in cpu/memory/firmware if not manually configured.
             # Also attempt when manufacturer is unknown (handles entries created before
             # manufacturer detection was added — OIDs return None on non-HP switches).
-            manufacturer = getattr(self, "manufacturer", "").lower()
-            is_hp = any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS)
-            is_unknown_manufacturer = not manufacturer or manufacturer == "unknown"
+            # Note: is_hp / is_unknown_manufacturer already computed above for PoE detection.
             if is_hp or is_unknown_manufacturer:
                 if not self.system_oids.get("cpu", "").strip() and system.get("cpu") is None:
                     hp_cpu = await async_snmp_get(
@@ -380,6 +404,13 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                             system["memory"] = round(float(hp_used) / float(hp_total) * 100, 1) if float(hp_total) > 0 else None
                         except (ValueError, TypeError):
                             pass
+                if not self.system_oids.get("firmware", "").strip() and system.get("firmware") is None:
+                    hp_fw = await async_snmp_get(
+                        self.hass, self.host, self.community, self.snmp_port,
+                        HP_OID_FIRMWARE, mp_model=self.mp_model,
+                    )
+                    if hp_fw is not None:
+                        system["firmware"] = str(hp_fw).strip() or system["firmware"]
 
             # PoE budget (RFC 3621) + ENTITY-SENSOR-MIB (RFC 3433) — all in parallel
             (
