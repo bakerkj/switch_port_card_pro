@@ -25,7 +25,7 @@ CONF_OID_CUSTOM: Final = "oid_custom"
 CONF_OID_DOT1D_BASE_PORT_IFINDEX: Final = "1.3.6.1.2.1.17.1.4.1.2"  # bridge port → ifIndex
 
 # HP/Aruba/ProCurve auto-detected OIDs (used when cpu/memory not manually configured)
-HP_OID_CPU_5MIN: Final = "1.3.6.1.4.1.11.2.14.11.5.1.7.1.1.4.0"       # hpSwitchCpuStat5MinAvg (%)
+HP_OID_CPU_REALTIME: Final = "1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"     # real-time CPU % — works on HP 2530/2520 and Aruba 2930M
 HP_OID_MEMORY_USED: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.6.1" # bytes used
 HP_OID_MEMORY_TOTAL: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.5.1" # bytes total
 HP_OID_POE_POWER: Final = "1.3.6.1.4.1.11.2.14.11.1.9.1.1.1.8"           # actual per-port draw (mW) — newer HP/Aruba (2530, 2930)

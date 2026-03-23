@@ -30,7 +30,7 @@ from homeassistant.helpers.update_coordinator import (
 from .const import (
     DOMAIN,
     SNMP_VERSION_TO_MP_MODEL,
-    HP_OID_CPU_5MIN,
+    HP_OID_CPU_REALTIME,
     HP_OID_MEMORY_USED,
     HP_OID_MEMORY_TOTAL,
     HP_OID_POE_POWER,
@@ -382,10 +382,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             # Note: is_hp / is_unknown_manufacturer already computed above for PoE detection.
             if is_hp or is_unknown_manufacturer:
                 if not self.system_oids.get("cpu", "").strip() and system.get("cpu") is None:
-                    hp_cpu = await async_snmp_get(
-                        self.hass, self.host, self.community, self.snmp_port,
-                        HP_OID_CPU_5MIN, mp_model=self.mp_model,
-                    )
+                    hp_cpu = await async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_CPU_REALTIME, mp_model=self.mp_model)
                     if hp_cpu is not None:
                         system["cpu"] = hp_cpu
                 if not self.system_oids.get("memory", "").strip() and system.get("memory") is None:
