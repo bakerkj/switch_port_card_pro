@@ -148,27 +148,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         detected = None
     
     # === CONFIGURE PORTS ===
+    # new_options is populated below and saved AFTER platform setup to avoid
+    # triggering a reload (via update listeners) while async_setup_entry is still running.
+    new_options = None
+
     if is_first_install:
         new_options = dict(entry.options)
-        new_options.pop("re_detect_ports", None)  # clear flag — listener not yet registered so no reload loop
-        
+        new_options.pop("re_detect_ports", None)  # clear re-detect flag
+
         if detected:
             # Auto-configure from detection
             all_ports = sorted(int(p) for p in detected.keys())
             new_options[CONF_PORTS] = all_ports
-            
+
             # Store SFP port range
             sfp_ports = [p for p, info in detected.items() if info.get("is_sfp")]
             if sfp_ports:
                 new_options["sfp_ports_start"] = min(sfp_ports)
                 new_options["sfp_ports_end"] = max(sfp_ports)
-            
+
             new_options["manufacturer"] = manufacturer
             new_options["auto_detected"] = True
-            new_options["detection_method"] = detection_summary
-            
+
             _LOGGER.info(
-                "First install: auto-configured %d ports on %s (%s) | SFP: %s | Detection: %s", 
+                "First install: auto-configured %d ports on %s (%s) | SFP: %s | Detection: %s",
                 len(all_ports), host, manufacturer,
                 f"ports {min(sfp_ports)}-{max(sfp_ports)}" if sfp_ports else "none",
                 detection_summary
@@ -181,44 +184,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             new_options["detection_failed"] = True
             new_options["manufacturer"] = "Unknown"
             new_options["auto_detected"] = False
-            new_options["detection_method"] = "failed"
-            
+
             _LOGGER.warning(
                 "Port detection failed on %s during initial setup. "
                 "Using default 8 ports. Please configure manually if incorrect.",
                 host
             )
-        
-        hass.config_entries.async_update_entry(entry, options=new_options)
-    
+
     else:
         # Already configured - Update metadata if we have fresh detection results
         user_ports = entry.options.get(CONF_PORTS, list(range(1, 9)))
-        
+
         if detected:
             new_options = dict(entry.options)
-            
+
             # Extract manufacturer from detection
             sample_info = next(iter(detected.values()))
             manufacturer = sample_info.get("manufacturer", "Unknown")
             detection_summary = _get_detection_summary(detected)
-            
+
             # 1. Update Manufacturer if it was unknown or changed
             old_manufacturer = entry.options.get("manufacturer", "Unknown")
             if manufacturer != "Unknown" and old_manufacturer != manufacturer:
                 new_options["manufacturer"] = manufacturer
-                _LOGGER.info("Updated manufacturer for %s: %s → %s", 
+                _LOGGER.info("Updated manufacturer for %s: %s → %s",
                            host, old_manufacturer, manufacturer)
-            
-            # 2. Update detection metadata
-            new_options["detection_method"] = detection_summary
-            
-            # 3. Port validation and configuration
+
+            # 2. Port validation and configuration
             all_detected = sorted(int(p) for p in detected.keys())
-            
+
             if isinstance(user_ports, list) and user_ports:
                 max_user_port = max(user_ports)
-                
+
                 # Warn if user configured more ports than detected
                 if max_user_port > len(all_detected):
                     _LOGGER.warning(
@@ -226,32 +223,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "Extra ports may not work correctly.",
                         max_user_port, host, len(all_detected)
                     )
-                
+
                 # Use detected ports up to user's limit
                 ports = [p for p in all_detected if p <= max_user_port]
-                
+
                 # If user configured more ports than detected, fill in the rest
                 if max_user_port > max(all_detected):
                     ports.extend(range(max(all_detected) + 1, max_user_port + 1))
             else:
                 # User didn't configure specific ports, use all detected
                 ports = all_detected.copy()
-            
+
             # Update SFP port range if detected
             sfp_ports = [p for p, info in detected.items() if info.get("is_sfp")]
             if sfp_ports:
                 new_options["sfp_ports_start"] = min(sfp_ports)
                 new_options["sfp_ports_end"] = max(sfp_ports)
-            
-            # Only update entry if something changed
-            if new_options != entry.options:
-                hass.config_entries.async_update_entry(entry, options=new_options)
-                _LOGGER.debug("Updated config entry metadata for %s", host)
+
+            # Discard new_options if nothing meaningful changed (avoid spurious reloads)
+            if new_options == dict(entry.options):
+                new_options = None
+            else:
+                _LOGGER.debug("Detected config changes for %s, will persist after setup", host)
         else:
             # Detection failed - use user's manual config
             ports = user_ports if isinstance(user_ports, list) else list(range(1, 9))
             manufacturer = entry.options.get("manufacturer", "Unknown")
-            
+
             _LOGGER.debug(
                 "Using manually configured ports on %s (%d ports) - detection unavailable",
                 host, len(ports)
@@ -295,13 +293,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store coordinator
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
+    # First refresh BEFORE forwarding to platforms.
+    # If this raises ConfigEntryNotReady, no platforms have been set up yet, so
+    # HA can safely retry async_setup_entry without hitting "already been setup".
+    await coordinator.async_config_entry_first_refresh()
+
     # Forward to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Background first refresh
-    await coordinator.async_config_entry_first_refresh()
-
     entry.async_on_unload(entry.add_update_listener(async_options_updated))
+
+    # Persist any auto-detected option changes NOW — after all awaits and listener registration.
+    # There is no await between here and return True, so the scheduled listener task cannot
+    # run until after async_setup_entry returns, at which point setup is complete and any
+    # triggered reload will be clean.
+    if new_options is not None and new_options != dict(entry.options):
+        hass.config_entries.async_update_entry(entry, options=new_options)
+
     return True
 
 
