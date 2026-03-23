@@ -350,49 +350,46 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 "custom": get("custom"),
             }
 
-            # HP/Aruba auto-detection: fill in cpu/memory if not manually configured.
-            # Also attempt when manufacturer is unknown (handles entries created before
-            # manufacturer detection was added — OIDs return None on non-HP switches).
+            # Determine whether HP auto-detection queries are needed before issuing the gather.
             manufacturer = getattr(self, "manufacturer", "").lower()
             is_hp = any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS)
             is_unknown_manufacturer = not manufacturer or manufacturer == "unknown"
-            if is_hp or is_unknown_manufacturer:
-                if not self.system_oids.get("cpu", "").strip() and system.get("cpu") is None:
-                    hp_cpu = await async_snmp_get(
-                        self.hass, self.host, self.community, self.snmp_port,
-                        HP_OID_CPU_5MIN, mp_model=self.mp_model,
-                    )
-                    if hp_cpu is not None:
-                        system["cpu"] = hp_cpu
-                if not self.system_oids.get("memory", "").strip() and system.get("memory") is None:
-                    hp_used, hp_total = await asyncio.gather(
-                        async_snmp_get(
-                            self.hass, self.host, self.community, self.snmp_port,
-                            HP_OID_MEMORY_USED, mp_model=self.mp_model,
-                        ),
-                        async_snmp_get(
-                            self.hass, self.host, self.community, self.snmp_port,
-                            HP_OID_MEMORY_TOTAL, mp_model=self.mp_model,
-                        ),
-                    )
-                    if hp_used is not None and hp_total is not None:
-                        try:
-                            system["memory"] = round(float(hp_used) / float(hp_total) * 100, 1) if float(hp_total) > 0 else None
-                        except (ValueError, TypeError):
-                            pass
+            need_hp_cpu = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("cpu", "").strip()
+            need_hp_memory = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("memory", "").strip()
 
-            # PoE budget (RFC 3621) + ENTITY-SENSOR-MIB (RFC 3433) — all in parallel
-            (
-                poe_budget_raw,
-                ent_type_raw, ent_value_raw, ent_opstatus_raw, ent_name_raw,
-            ) = await asyncio.gather(
+            # PoE budget (RFC 3621) + ENTITY-SENSOR-MIB (RFC 3433) + HP auto-detect — all in parallel
+            hp_tasks = []
+            if need_hp_cpu:
+                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_CPU_5MIN, mp_model=self.mp_model))
+            if need_hp_memory:
+                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_MEMORY_USED, mp_model=self.mp_model))
+                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_MEMORY_TOTAL, mp_model=self.mp_model))
+
+            gather_results = await asyncio.gather(
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_POE_BUDGET_TOTAL, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_TYPE, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_VALUE, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_OPSTATUS, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_PHYSICAL_NAME, mp_model=self.mp_model),
+                *hp_tasks,
                 return_exceptions=True,
             )
+
+            poe_budget_raw, ent_type_raw, ent_value_raw, ent_opstatus_raw, ent_name_raw = gather_results[:5]
+            hp_results = list(gather_results[5:])
+
+            # Apply HP auto-detection results
+            if need_hp_cpu:
+                hp_cpu = hp_results.pop(0)
+                if hp_cpu is not None and not isinstance(hp_cpu, Exception):
+                    system["cpu"] = hp_cpu
+            if need_hp_memory:
+                hp_used, hp_total = hp_results[0], hp_results[1]
+                if hp_used is not None and hp_total is not None and not isinstance(hp_used, Exception) and not isinstance(hp_total, Exception):
+                    try:
+                        system["memory"] = round(float(hp_used) / float(hp_total) * 100, 1) if float(hp_total) > 0 else None
+                    except (ValueError, TypeError):
+                        pass
 
             def _first_int(raw) -> int | None:
                 if isinstance(raw, Exception) or not raw:
