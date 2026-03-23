@@ -27,6 +27,9 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_oid": "Ungültiges OID-Format. Bitte gepunktete numerische Notation verwenden (z.B. 1.3.6.1.2.1.1.1.0) oder leer lassen."
+    },
     "step": {
       "options": {
         "title": "Switch Port Card Pro konfigurieren",

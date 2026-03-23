@@ -194,40 +194,52 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
         """Handle options."""
         current = self.config_entry.options
 
-        def valid_oid(value: str) -> str:
-            """Accept blank or a dotted-numeric OID string."""
-            stripped = value.strip() if value else ""
-            if not stripped:
-                return ""
-            import re
-            if not re.fullmatch(r"\d+(\.\d+)*", stripped):
-                raise vol.Invalid(f"Invalid OID format: '{value}'. Use dotted numeric notation (e.g. 1.3.6.1.2.1.1.1.0) or leave blank.")
-            return stripped
-
         if user_input is not None:
+            import re
+            errors: dict[str, str] = {}
+
+            # Validate and strip all OID fields
+            for key, value in user_input.items():
+                if key.startswith("oid_"):
+                    stripped = value.strip() if value else ""
+                    if stripped and not re.fullmatch(r"\d+(\.\d+)*", stripped):
+                        errors[key] = "invalid_oid"
+                    else:
+                        user_input[key] = stripped
+
+            if errors:
+                return self.async_show_form(
+                    step_id="options",
+                    data_schema=self._build_schema(current, user_input),
+                    errors=errors,
+                )
+
             # Convert port strings (from multi-select) to integers for saving
             if CONF_PORTS in user_input and isinstance(user_input[CONF_PORTS], list):
                 user_input[CONF_PORTS] = [int(p) for p in user_input[CONF_PORTS]]
-            
 
             try:
                 new = {**current, **user_input}
                 return self.async_create_entry(title="", data=new)
-             #   return self.async_create_entry(title="", data=user_input)
             except Exception as err:
                 _LOGGER.exception("Error saving options: %s", err)
-                return self.async_abort(reason="Error storing input")            
+                return self.async_abort(reason="Error storing input")
 
-        # Prepare for schema generation
+        return self.async_show_form(
+            step_id="options",
+            data_schema=self._build_schema(current),
+        )
+
+    def _build_schema(self, current: dict, overrides: dict | None = None) -> vol.Schema:
+        """Build the options schema, optionally pre-filling fields from overrides."""
+        src = {**current, **(overrides or {})}
         ports_dict = {str(i): str(i) for i in range(1, 65)}
-        current_ports = [str(p) for p in current.get(CONF_PORTS, DEFAULT_PORTS)]
-
-        # --- Options Schema ---
-        schema = vol.Schema(
+        current_ports = [str(p) for p in src.get(CONF_PORTS, DEFAULT_PORTS)]
+        return vol.Schema(
             {
                 vol.Optional(
                     "update_interval",
-                    default=current.get("update_interval", 20)
+                    default=src.get("update_interval", 20)
                 ): cv.positive_int,
                 vol.Optional(
                     CONF_PORTS,
@@ -240,92 +252,87 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                 
                 vol.Optional(
                     CONF_INCLUDE_VLANS,
-                    default=current.get(CONF_INCLUDE_VLANS, True),
+                    default=src.get(CONF_INCLUDE_VLANS, True),
                 ): cv.boolean,
                 
                 # --- Port OIDs ---
                 vol.Optional(
                     "oid_rx",
-                    default=current.get("oid_rx", DEFAULT_BASE_OIDS["rx"]),
-                ): valid_oid,
+                    default=src.get("oid_rx", DEFAULT_BASE_OIDS["rx"]),
+                ): cv.string,
                 vol.Optional(
                     "oid_tx",
-                    default=current.get("oid_tx", DEFAULT_BASE_OIDS["tx"]),
-                ): valid_oid,
+                    default=src.get("oid_tx", DEFAULT_BASE_OIDS["tx"]),
+                ): cv.string,
                 vol.Optional(
                     "oid_status",
-                    default=current.get("oid_status", DEFAULT_BASE_OIDS["status"]),
-                ): valid_oid,
+                    default=src.get("oid_status", DEFAULT_BASE_OIDS["status"]),
+                ): cv.string,
                 vol.Optional(
                     "oid_speed",
-                    default=current.get("oid_speed", DEFAULT_BASE_OIDS["speed"]),
-                ): valid_oid,
+                    default=src.get("oid_speed", DEFAULT_BASE_OIDS["speed"]),
+                ): cv.string,
                 vol.Optional(
                     "oid_name",
-                    default=current.get("oid_name", DEFAULT_BASE_OIDS.get("name", "")),
-                ): valid_oid,
+                    default=src.get("oid_name", DEFAULT_BASE_OIDS.get("name", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_vlan",
-                    default=current.get("oid_vlan", DEFAULT_BASE_OIDS.get("vlan", "")),
-                ): valid_oid,
+                    default=src.get("oid_vlan", DEFAULT_BASE_OIDS.get("vlan", "")),
+                ): cv.string,
 
                 # --- System OIDs ---
                 vol.Optional(
                     "oid_cpu",
-                    default=current.get("oid_cpu", DEFAULT_SYSTEM_OIDS.get("cpu", "")),
-                ): valid_oid,
+                    default=src.get("oid_cpu", DEFAULT_SYSTEM_OIDS.get("cpu", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_firmware",
-                    default=current.get("oid_firmware", DEFAULT_SYSTEM_OIDS.get("firmware", "")),
-                ): valid_oid,
+                    default=src.get("oid_firmware", DEFAULT_SYSTEM_OIDS.get("firmware", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_memory",
-                    default=current.get("oid_memory", DEFAULT_SYSTEM_OIDS.get("memory", "")),
-                ): valid_oid,
+                    default=src.get("oid_memory", DEFAULT_SYSTEM_OIDS.get("memory", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_memory_total",
-                    default=current.get("oid_memory_total", DEFAULT_SYSTEM_OIDS.get("memory_total", "")),
-                ): valid_oid,
+                    default=src.get("oid_memory_total", DEFAULT_SYSTEM_OIDS.get("memory_total", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_hostname",
-                    default=current.get("oid_hostname", DEFAULT_SYSTEM_OIDS.get("hostname", "")),
-                ): valid_oid,
+                    default=src.get("oid_hostname", DEFAULT_SYSTEM_OIDS.get("hostname", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_uptime",
-                    default=current.get("oid_uptime", DEFAULT_SYSTEM_OIDS.get("uptime", "")),
-                ): valid_oid,
+                    default=src.get("oid_uptime", DEFAULT_SYSTEM_OIDS.get("uptime", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_poe_power",
-                    default=current.get("oid_poe_power", DEFAULT_SYSTEM_OIDS.get("poe_power", "")),
-                ): valid_oid,
+                    default=src.get("oid_poe_power", DEFAULT_SYSTEM_OIDS.get("poe_power", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_poe_status",
-                    default=current.get("oid_poe_status", DEFAULT_SYSTEM_OIDS.get("poe_status", "")),
-                ): valid_oid,
+                    default=src.get("oid_poe_status", DEFAULT_SYSTEM_OIDS.get("poe_status", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_poe_class",
-                    default=current.get("oid_poe_class", DEFAULT_BASE_OIDS.get("poe_class", "")),
-                ): valid_oid,
+                    default=src.get("oid_poe_class", DEFAULT_BASE_OIDS.get("poe_class", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_custom",
-                    default=current.get("oid_custom", DEFAULT_SYSTEM_OIDS.get("custom", "")),
-                ): valid_oid,
+                    default=src.get("oid_custom", DEFAULT_SYSTEM_OIDS.get("custom", "")),
+                ): cv.string,
                 vol.Optional(
                     "oid_port_custom",
-                    default=current.get("oid_port_custom", DEFAULT_SYSTEM_OIDS.get("port_custom", "")),
-                ): valid_oid,
+                    default=src.get("oid_port_custom", DEFAULT_SYSTEM_OIDS.get("port_custom", "")),
+                ): cv.string,
                 vol.Optional(
                     "snmp_version",
-                    default=current.get("snmp_version", "v2c"),
+                    default=src.get("snmp_version", "v2c"),
                 ): vol.In({"v2c": "v2c", "v1": "v1"}),
      #           vol.Optional(
      #               CONF_SFP_PORTS_START, 
      #               default=25,
      #           ): vol.All(vol.Coerce(int), vol.Range(min=1, max=52)),
             }
-        )
-
-        return self.async_show_form(
-            step_id="options",
-            data_schema=schema,
         )
