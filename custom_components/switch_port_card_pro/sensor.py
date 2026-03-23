@@ -111,18 +111,19 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             if self.include_vlans and self.base_oids.get("vlan"):
                 oids_to_walk.append("vlan")
 
-            tasks = [
+            port_tasks = [
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, self.base_oids[k], mp_model=self.mp_model)
                 for k in oids_to_walk if self.base_oids.get(k)
             ]
-            # Always walk standard IF-MIB OIDs — not user-configurable
-            (
-                hc_rx_raw, hc_tx_raw,
-                in_errors_raw, out_errors_raw,
-                in_discards_raw, out_discards_raw,
-                admin_status_raw, last_change_raw,
-                *results
-            ) = await asyncio.gather(
+            # VLAN bridge + egress walks are conditional but independent — include in gather 1.
+            need_vlans = self.include_vlans and bool(self.base_oids.get("vlan"))
+            vlan_tasks = [
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, "1.3.6.1.2.1.17.1.4.1.2", mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, "1.3.6.1.2.1.17.7.1.4.2.1.4", mp_model=self.mp_model),
+            ] if need_vlans else []
+
+            # Gather 1: IF-MIB walks + sysUpTime + user port OIDs + VLAN walks — all in parallel.
+            g1 = await asyncio.gather(
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCINOCTETS, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCOUTOCTETS, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFINERRORS, mp_model=self.mp_model),
@@ -131,12 +132,20 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFOUTDISCARDS, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFADMINSTATUS, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFLASTCHANGE, mp_model=self.mp_model),
-                *tasks,
+                async_snmp_get(self.hass, self.host, self.community, self.snmp_port, CONF_OID_SYSUPTIME, mp_model=self.mp_model),
+                *port_tasks,
+                *vlan_tasks,
                 return_exceptions=True,
             )
 
+            (hc_rx_raw, hc_tx_raw, in_errors_raw, out_errors_raw,
+             in_discards_raw, out_discards_raw, admin_status_raw, last_change_raw,
+             sys_uptime_raw) = g1[:9]
+            port_results = g1[9:9 + len(port_tasks)]
+            vlan_results = g1[9 + len(port_tasks):]
+
             walk_map: dict[str, dict[str, str]] = {}
-            for key, result in zip([k for k in oids_to_walk if self.base_oids.get(k)], results):
+            for key, result in zip([k for k in oids_to_walk if self.base_oids.get(k)], port_results):
                 if isinstance(result, Exception):
                     _LOGGER.error("SNMP walk failed for %s: %s", key, result)
                     walk_map[key] = {}
@@ -166,15 +175,11 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             out_discards = parse(out_discards_raw if not isinstance(out_discards_raw, Exception) else {})
             admin_status = parse(admin_status_raw if not isinstance(admin_status_raw, Exception) else {})
             last_change = parse(last_change_raw if not isinstance(last_change_raw, Exception) else {})
-            # sysUpTime for computing time-since-last-change
-            sys_uptime_raw = await async_snmp_get(
-                self.hass, self.host, self.community, self.snmp_port,
-                CONF_OID_SYSUPTIME, mp_model=self.mp_model,
-            )
             try:
                 sys_uptime_ticks = int(sys_uptime_raw) if sys_uptime_raw is not None else None
             except (ValueError, TypeError):
                 sys_uptime_ticks = None
+
             status = parse(walk_map.get("status", {}))
             speed = parse(walk_map.get("speed", {}))
             name = parse(walk_map.get("name", {}), int_val=False)
@@ -197,23 +202,12 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 except Exception:
                     return False
 
-            # Build if_index → bridge_port mapping and fetch per-VLAN egress bitmaps in parallel.
-            # dot1qPvid is indexed by dot1dBasePort (RFC 4363), not ifIndex.
+            # Unpack VLAN results from gather 1 (dot1qPvid indexed by dot1dBasePort, RFC 4363).
             ifindex_to_bridge_port: dict[int, int] = {}
             vlan_egress_bitmaps: dict[int, str] = {}
-            if self.include_vlans and self.base_oids.get("vlan"):
-                bridge_walk, egress_walk = await asyncio.gather(
-                    async_snmp_walk(
-                        self.hass, self.host, self.community, self.snmp_port,
-                        "1.3.6.1.2.1.17.1.4.1.2",      # dot1dBasePortIfIndex (RFC 4188)
-                        mp_model=self.mp_model,
-                    ),
-                    async_snmp_walk(
-                        self.hass, self.host, self.community, self.snmp_port,
-                        "1.3.6.1.2.1.17.7.1.4.2.1.4",  # dot1qVlanCurrentEgressPorts (RFC 4363)
-                        mp_model=self.mp_model,
-                    ),
-                )
+            if need_vlans and len(vlan_results) == 2:
+                bridge_walk = vlan_results[0] if not isinstance(vlan_results[0], Exception) else {}
+                egress_walk = vlan_results[1] if not isinstance(vlan_results[1], Exception) else {}
                 for b_oid, b_val in bridge_walk.items():
                     try:
                         b_port = int(b_oid.split(".")[-1])
@@ -316,16 +310,38 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
 
             # store for next run
             self._last_total_bytes = current_total_bytes
-            # === SYSTEM OIDs ===
-            raw_system = await async_snmp_bulk(
-                self.hass,
-                self.host,
-                self.community,
-                self.snmp_port,
-                [oid for oid in self.system_oids.values() if oid],
-                mp_model=self.mp_model,
+
+            # Determine whether HP auto-detection queries are needed before issuing the gather.
+            manufacturer = getattr(self, "manufacturer", "").lower()
+            is_hp = any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS)
+            is_unknown_manufacturer = not manufacturer or manufacturer == "unknown"
+            need_hp_cpu = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("cpu", "").strip()
+            need_hp_memory = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("memory", "").strip()
+
+            # System OIDs bulk + PoE budget (RFC 3621) + ENTITY-SENSOR-MIB (RFC 3433) + HP auto-detect — all in parallel
+            hp_tasks = []
+            if need_hp_cpu:
+                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_CPU_5MIN, mp_model=self.mp_model))
+            if need_hp_memory:
+                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_MEMORY_USED, mp_model=self.mp_model))
+                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_MEMORY_TOTAL, mp_model=self.mp_model))
+
+            gather_results = await asyncio.gather(
+                async_snmp_bulk(self.hass, self.host, self.community, self.snmp_port, [oid for oid in self.system_oids.values() if oid], mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_POE_BUDGET_TOTAL, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_TYPE, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_VALUE, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_OPSTATUS, mp_model=self.mp_model),
+                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_PHYSICAL_NAME, mp_model=self.mp_model),
+                *hp_tasks,
+                return_exceptions=True,
             )
 
+            raw_system = gather_results[0] if not isinstance(gather_results[0], Exception) else {}
+            poe_budget_raw, ent_type_raw, ent_value_raw, ent_opstatus_raw, ent_name_raw = gather_results[1:6]
+            hp_results = list(gather_results[6:])
+
+            # === SYSTEM OIDs ===
             def get(oid_key: str) -> str | None:
                 oid = self.system_oids.get(oid_key)
                 return next((v for k, v in raw_system.items() if oid and k.startswith(oid)), None)
@@ -349,34 +365,6 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 "poe_total_watts": round(total_poe_mw / 1000.0, 2) if total_poe_mw > 0 else None,
                 "custom": get("custom"),
             }
-
-            # Determine whether HP auto-detection queries are needed before issuing the gather.
-            manufacturer = getattr(self, "manufacturer", "").lower()
-            is_hp = any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS)
-            is_unknown_manufacturer = not manufacturer or manufacturer == "unknown"
-            need_hp_cpu = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("cpu", "").strip()
-            need_hp_memory = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("memory", "").strip()
-
-            # PoE budget (RFC 3621) + ENTITY-SENSOR-MIB (RFC 3433) + HP auto-detect — all in parallel
-            hp_tasks = []
-            if need_hp_cpu:
-                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_CPU_5MIN, mp_model=self.mp_model))
-            if need_hp_memory:
-                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_MEMORY_USED, mp_model=self.mp_model))
-                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_MEMORY_TOTAL, mp_model=self.mp_model))
-
-            gather_results = await asyncio.gather(
-                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_POE_BUDGET_TOTAL, mp_model=self.mp_model),
-                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_TYPE, mp_model=self.mp_model),
-                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_VALUE, mp_model=self.mp_model),
-                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_SENSOR_OPSTATUS, mp_model=self.mp_model),
-                async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_ENT_PHYSICAL_NAME, mp_model=self.mp_model),
-                *hp_tasks,
-                return_exceptions=True,
-            )
-
-            poe_budget_raw, ent_type_raw, ent_value_raw, ent_opstatus_raw, ent_name_raw = gather_results[:5]
-            hp_results = list(gather_results[5:])
 
             # Apply HP auto-detection results
             if need_hp_cpu:
