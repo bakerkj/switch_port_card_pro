@@ -25,9 +25,12 @@ CONF_OID_CUSTOM: Final = "oid_custom"
 CONF_OID_DOT1D_BASE_PORT_IFINDEX: Final = "1.3.6.1.2.1.17.1.4.1.2"  # bridge port → ifIndex
 
 # HP/Aruba/ProCurve auto-detected OIDs (used when cpu/memory not manually configured)
-HP_OID_CPU_5MIN: Final = "1.3.6.1.4.1.11.2.14.11.5.1.7.1.1.4.0"       # hpSwitchCpuStat5MinAvg (%)
-HP_OID_MEMORY_USED: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.6.1" # bytes used
+HP_OID_CPU_5MIN: Final = "1.3.6.1.4.1.11.2.14.11.5.1.7.1.1.4.0"         # hpSwitchCpuStat5MinAvg (%)
+HP_OID_MEMORY_USED: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.6.1"  # bytes used
 HP_OID_MEMORY_TOTAL: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.5.1" # bytes total
+HP_OID_POE_POWER: Final = "1.3.6.1.4.1.11.2.14.11.1.9.1.1.1.8"           # actual per-port draw (mW)
+HP_OID_POE_STATUS: Final = "1.3.6.1.2.1.105.1.1.1.6"                     # pethPsePortOperStatus (RFC 3621)
+HP_OID_POE_CLASS: Final = "1.3.6.1.2.1.105.1.1.1.10"                     # pethPsePortPowerClassifications (RFC 3621)
 HP_MANUFACTURER_KEYWORDS: Final = ("hp", "aruba", "procurve", "hewlett")
 CONF_OID_PORT_CUSTOM: Final = "oid_port_custom"
 CONF_OID_CPU: Final = "oid_cpu"

@@ -33,6 +33,9 @@ from .const import (
     HP_OID_CPU_5MIN,
     HP_OID_MEMORY_USED,
     HP_OID_MEMORY_TOTAL,
+    HP_OID_POE_POWER,
+    HP_OID_POE_STATUS,
+    HP_OID_POE_CLASS,
     HP_MANUFACTURER_KEYWORDS,
     CONF_OID_IFHCINOCTETS,
     CONF_OID_IFHCOUTOCTETS,
@@ -107,6 +110,10 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     for p in self.ports
                 }   
             # === PORT WALKS ===
+            manufacturer = getattr(self, "manufacturer", "").lower()
+            is_hp = any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS)
+            is_unknown_manufacturer = not manufacturer or manufacturer == "unknown"
+
             oids_to_walk = ["rx", "tx", "status", "speed", "name", "poe_power", "poe_status", "poe_class", "port_custom"]
             if self.include_vlans and self.base_oids.get("vlan"):
                 oids_to_walk.append("vlan")
@@ -122,7 +129,16 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, "1.3.6.1.2.1.17.7.1.4.2.1.4", mp_model=self.mp_model),
             ] if need_vlans else []
 
-            # Gather 1: IF-MIB walks + sysUpTime + user port OIDs + VLAN walks — all in parallel.
+            # HP PoE walks: run when PoE OIDs are not manually configured and switch is HP/unknown.
+            hp_poe_keys: list[str] = []
+            hp_poe_tasks = []
+            if is_hp or is_unknown_manufacturer:
+                for key, oid in (("poe_power", HP_OID_POE_POWER), ("poe_status", HP_OID_POE_STATUS), ("poe_class", HP_OID_POE_CLASS)):
+                    if not self.base_oids.get(key, "").strip():
+                        hp_poe_keys.append(key)
+                        hp_poe_tasks.append(async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, oid, mp_model=self.mp_model))
+
+            # Gather 1: IF-MIB walks + sysUpTime + user port OIDs + VLAN walks + HP PoE walks — all in parallel.
             g1 = await asyncio.gather(
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCINOCTETS, mp_model=self.mp_model),
                 async_snmp_walk(self.hass, self.host, self.community, self.snmp_port, CONF_OID_IFHCOUTOCTETS, mp_model=self.mp_model),
@@ -135,6 +151,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 async_snmp_get(self.hass, self.host, self.community, self.snmp_port, CONF_OID_SYSUPTIME, mp_model=self.mp_model),
                 *port_tasks,
                 *vlan_tasks,
+                *hp_poe_tasks,
                 return_exceptions=True,
             )
 
@@ -142,7 +159,8 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
              in_discards_raw, out_discards_raw, admin_status_raw, last_change_raw,
              sys_uptime_raw) = g1[:9]
             port_results = g1[9:9 + len(port_tasks)]
-            vlan_results = g1[9 + len(port_tasks):]
+            vlan_results = g1[9 + len(port_tasks):9 + len(port_tasks) + len(vlan_tasks)]
+            hp_poe_results = g1[9 + len(port_tasks) + len(vlan_tasks):]
 
             walk_map: dict[str, dict[str, str]] = {}
             for key, result in zip([k for k in oids_to_walk if self.base_oids.get(k)], port_results):
@@ -154,6 +172,10 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     walk_map[key] = {}
                 else:
                     walk_map[key] = result
+
+            # Inject HP PoE auto-detection results into walk_map (only populated when OIDs were blank).
+            for key, result in zip(hp_poe_keys, hp_poe_results):
+                walk_map[key] = result if not isinstance(result, Exception) and result else {}
 
             def parse(raw: dict[str, str], int_val: bool = True) -> dict[int, Any]:
                 out = {}
@@ -311,10 +333,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             # store for next run
             self._last_total_bytes = current_total_bytes
 
-            # Determine whether HP auto-detection queries are needed before issuing the gather.
-            manufacturer = getattr(self, "manufacturer", "").lower()
-            is_hp = any(m in manufacturer for m in HP_MANUFACTURER_KEYWORDS)
-            is_unknown_manufacturer = not manufacturer or manufacturer == "unknown"
+            # Determine whether HP CPU/memory auto-detection queries are needed before issuing the gather.
             need_hp_cpu = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("cpu", "").strip()
             need_hp_memory = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("memory", "").strip()
 
