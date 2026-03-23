@@ -36,6 +36,7 @@ from .const import (
     HP_OID_POE_POWER,
     HP_OID_POE_STATUS,
     HP_OID_POE_CLASS,
+    HP_OID_FIRMWARE,
     HP_MANUFACTURER_KEYWORDS,
     CONF_OID_IFHCINOCTETS,
     CONF_OID_IFHCOUTOCTETS,
@@ -333,9 +334,10 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             # store for next run
             self._last_total_bytes = current_total_bytes
 
-            # Determine whether HP CPU/memory auto-detection queries are needed before issuing the gather.
+            # Determine whether HP CPU/memory/firmware auto-detection queries are needed before issuing the gather.
             need_hp_cpu = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("cpu", "").strip()
             need_hp_memory = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("memory", "").strip()
+            need_hp_firmware = (is_hp or is_unknown_manufacturer) and not self.system_oids.get("firmware", "").strip()
 
             # System OIDs bulk + PoE budget (RFC 3621) + ENTITY-SENSOR-MIB (RFC 3433) + HP auto-detect — all in parallel
             hp_tasks = []
@@ -344,6 +346,8 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             if need_hp_memory:
                 hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_MEMORY_USED, mp_model=self.mp_model))
                 hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_MEMORY_TOTAL, mp_model=self.mp_model))
+            if need_hp_firmware:
+                hp_tasks.append(async_snmp_get(self.hass, self.host, self.community, self.snmp_port, HP_OID_FIRMWARE, mp_model=self.mp_model))
 
             gather_results = await asyncio.gather(
                 async_snmp_bulk(self.hass, self.host, self.community, self.snmp_port, [oid for oid in self.system_oids.values() if oid], mp_model=self.mp_model),
@@ -397,6 +401,11 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                         system["memory"] = round(float(hp_used) / float(hp_total) * 100, 1) if float(hp_total) > 0 else None
                     except (ValueError, TypeError):
                         pass
+                hp_results = hp_results[2:]
+            if need_hp_firmware:
+                hp_fw = hp_results[0] if hp_results else None
+                if hp_fw is not None and not isinstance(hp_fw, Exception):
+                    system["firmware"] = str(hp_fw).strip() or system["firmware"]
 
             def _first_int(raw) -> int | None:
                 if isinstance(raw, Exception) or not raw:
