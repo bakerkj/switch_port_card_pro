@@ -515,13 +515,10 @@ class SwitchPortBaseEntity(SensorEntity):
             sw_version=sys_info.get("firmware"),          # updated dynamically later
         )
 
-        # Auto update entity state when coordinator updates
-        self._unsub_coordinator = coordinator.async_add_listener(self.async_write_ha_state)
-
     @property
     def available(self) -> bool:
         """Return True only if we have data."""
-        try: 
+        try:
             return (
                 self.coordinator.last_update_success
                 and self.coordinator.data is not None
@@ -538,6 +535,7 @@ class SwitchPortBaseEntity(SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self._unsub_coordinator = self.coordinator.async_add_listener(self.async_write_ha_state)
 
         @callback
         def _update_device_info() -> None:
