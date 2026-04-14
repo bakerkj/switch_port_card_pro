@@ -1,20 +1,23 @@
-"""Async SNMP helper works perfectly with pysnmp-7"""
+"""Async SNMP helper built on puresnmp 2.x.
+
+Replaces pysnmp to avoid its MIB-loader blocking calls that trigger
+Home Assistant's blocking-call detector. Function signatures are preserved
+so sensor.py / config_flow.py / __init__.py do not need changes:
+``hass`` is still accepted (used for the one-time plugin pre-warm) and
+``mp_model`` (0=v1, 1=v2c) is still accepted and mapped internally.
+"""
+
 from __future__ import annotations
 import logging
 import re
 import asyncio
+from functools import partial
 from typing import Dict, Any
 
-from pysnmp.hlapi.v3arch.asyncio import (
-    SnmpEngine,
-    CommunityData,
-    UdpTransportTarget,
-    ContextData,
-    ObjectType,
-    ObjectIdentity,
-    get_cmd,
-    walk_cmd,
-)
+from puresnmp import Client, V1, V2C
+from puresnmp.transport import send_udp
+from x690.types import ObjectIdentifier, OctetString
+
 from .const import (
     CONF_OID_IDESCR,
     CONF_OID_IFTYPE,
@@ -30,43 +33,64 @@ _LOGGER = logging.getLogger(__name__)
 # MAU-MIB RFC 3636 (updated by RFC 4836): ifMauType values that indicate fiber/SFP media.
 # Values are OID identities under dot3MauType (1.3.6.1.2.1.26.4).
 # Suffix assignments verified against RFC 3636 §4 (entries 1-40) and RFC 4836 §4 (entries 41+).
-_FIBER_MAU_TYPES: frozenset[str] = frozenset({
-    # 10BASE-FL HD/FD — RFC 3636 .12/.13
-    "1.3.6.1.2.1.26.4.12", "1.3.6.1.2.1.26.4.13",
-    # 100BASE-FX HD/FD — RFC 3636 .17/.18
-    "1.3.6.1.2.1.26.4.17", "1.3.6.1.2.1.26.4.18",
-    # 1000BASE-X generic HD/FD — RFC 3636 .21/.22
-    "1.3.6.1.2.1.26.4.21", "1.3.6.1.2.1.26.4.22",
-    # 1000BASE-LX HD/FD — RFC 3636 .23/.24
-    "1.3.6.1.2.1.26.4.23", "1.3.6.1.2.1.26.4.24",
-    # 1000BASE-SX HD/FD — RFC 3636 .25/.26
-    "1.3.6.1.2.1.26.4.25", "1.3.6.1.2.1.26.4.26",
-    # 1000BASE-CX HD/FD (twinax) — RFC 3636 .27/.28
-    "1.3.6.1.2.1.26.4.27", "1.3.6.1.2.1.26.4.28",
-    # 10GBASE fiber variants — RFC 3636 .32-.40
-    # .31 (10GBASE-X) excluded: generic placeholder, covers both copper and fiber subtypes
-    "1.3.6.1.2.1.26.4.32",
-    "1.3.6.1.2.1.26.4.33", "1.3.6.1.2.1.26.4.34", "1.3.6.1.2.1.26.4.35",
-    "1.3.6.1.2.1.26.4.36", "1.3.6.1.2.1.26.4.37", "1.3.6.1.2.1.26.4.38",
-    "1.3.6.1.2.1.26.4.39", "1.3.6.1.2.1.26.4.40",
-    # 100BASE-BX10 single-fiber — RFC 4836 .44/.45
-    "1.3.6.1.2.1.26.4.44", "1.3.6.1.2.1.26.4.45",
-    # 100BASE-LX10 — RFC 4836 .46
-    "1.3.6.1.2.1.26.4.46",
-    # 1000BASE-BX10 single-fiber — RFC 4836 .47/.48
-    "1.3.6.1.2.1.26.4.47", "1.3.6.1.2.1.26.4.48",
-    # 1000BASE-LX10 — RFC 4836 .49
-    "1.3.6.1.2.1.26.4.49",
-    # 1000BASE-PX PON — RFC 4836 .50-.53
-    "1.3.6.1.2.1.26.4.50", "1.3.6.1.2.1.26.4.51",
-    "1.3.6.1.2.1.26.4.52", "1.3.6.1.2.1.26.4.53",
-    # 10GBASE-LRM — RFC 4836 .55
-    "1.3.6.1.2.1.26.4.55",
-    # 40GBASE fiber — RFC 4836 .72/.73/.74
-    "1.3.6.1.2.1.26.4.72", "1.3.6.1.2.1.26.4.73", "1.3.6.1.2.1.26.4.74",
-    # 100GBASE fiber — RFC 4836 .76/.77/.78
-    "1.3.6.1.2.1.26.4.76", "1.3.6.1.2.1.26.4.77", "1.3.6.1.2.1.26.4.78",
-})
+_FIBER_MAU_TYPES: frozenset[str] = frozenset(
+    {
+        # 10BASE-FL HD/FD — RFC 3636 .12/.13
+        "1.3.6.1.2.1.26.4.12",
+        "1.3.6.1.2.1.26.4.13",
+        # 100BASE-FX HD/FD — RFC 3636 .17/.18
+        "1.3.6.1.2.1.26.4.17",
+        "1.3.6.1.2.1.26.4.18",
+        # 1000BASE-X generic HD/FD — RFC 3636 .21/.22
+        "1.3.6.1.2.1.26.4.21",
+        "1.3.6.1.2.1.26.4.22",
+        # 1000BASE-LX HD/FD — RFC 3636 .23/.24
+        "1.3.6.1.2.1.26.4.23",
+        "1.3.6.1.2.1.26.4.24",
+        # 1000BASE-SX HD/FD — RFC 3636 .25/.26
+        "1.3.6.1.2.1.26.4.25",
+        "1.3.6.1.2.1.26.4.26",
+        # 1000BASE-CX HD/FD (twinax) — RFC 3636 .27/.28
+        "1.3.6.1.2.1.26.4.27",
+        "1.3.6.1.2.1.26.4.28",
+        # 10GBASE fiber variants — RFC 3636 .32-.40
+        # .31 (10GBASE-X) excluded: generic placeholder, covers both copper and fiber subtypes
+        "1.3.6.1.2.1.26.4.32",
+        "1.3.6.1.2.1.26.4.33",
+        "1.3.6.1.2.1.26.4.34",
+        "1.3.6.1.2.1.26.4.35",
+        "1.3.6.1.2.1.26.4.36",
+        "1.3.6.1.2.1.26.4.37",
+        "1.3.6.1.2.1.26.4.38",
+        "1.3.6.1.2.1.26.4.39",
+        "1.3.6.1.2.1.26.4.40",
+        # 100BASE-BX10 single-fiber — RFC 4836 .44/.45
+        "1.3.6.1.2.1.26.4.44",
+        "1.3.6.1.2.1.26.4.45",
+        # 100BASE-LX10 — RFC 4836 .46
+        "1.3.6.1.2.1.26.4.46",
+        # 1000BASE-BX10 single-fiber — RFC 4836 .47/.48
+        "1.3.6.1.2.1.26.4.47",
+        "1.3.6.1.2.1.26.4.48",
+        # 1000BASE-LX10 — RFC 4836 .49
+        "1.3.6.1.2.1.26.4.49",
+        # 1000BASE-PX PON — RFC 4836 .50-.53
+        "1.3.6.1.2.1.26.4.50",
+        "1.3.6.1.2.1.26.4.51",
+        "1.3.6.1.2.1.26.4.52",
+        "1.3.6.1.2.1.26.4.53",
+        # 10GBASE-LRM — RFC 4836 .55
+        "1.3.6.1.2.1.26.4.55",
+        # 40GBASE fiber — RFC 4836 .72/.73/.74
+        "1.3.6.1.2.1.26.4.72",
+        "1.3.6.1.2.1.26.4.73",
+        "1.3.6.1.2.1.26.4.74",
+        # 100GBASE fiber — RFC 4836 .76/.77/.78
+        "1.3.6.1.2.1.26.4.76",
+        "1.3.6.1.2.1.26.4.77",
+        "1.3.6.1.2.1.26.4.78",
+    }
+)
 
 MAU_TYPE_NAMES: dict[str, str] = {
     # Copper — RFC 3636
@@ -130,25 +154,118 @@ MAU_TYPE_NAMES: dict[str, str] = {
     "1.3.6.1.2.1.26.4.78": "100GBASE-ER4",
 }
 
-# Global engine and lock for thread-safe initialization
-_SNMP_ENGINE = None
-_ENGINE_LOCK = asyncio.Lock()
+# ── Plugin pre-warm ──────────────────────────────────────────────────────────
+# puresnmp creates a NEW Loader on every mpm.create() / security.create() call
+# and each Loader runs pkgutil.iter_modules (which calls os.listdir) during its
+# first discover_plugins() call. Because those functions are called inside
+# Client() and ultimately inside every SNMP walk, the listdir fires on every
+# single Client() instantiation, triggering HA's blocking-call detector.
+#
+# _prewarm_plugins runs the discovery once in an executor thread, then replaces
+# the module-level create callables with versions that reuse a single
+# pre-populated Loader instance, so no further filesystem I/O occurs.
+_PLUGINS_PREWARMED = False
+_PREWARM_LOCK = asyncio.Lock()
 
 
-async def _ensure_engine(hass):
-    """Ensure SNMP engine is created (thread-safe)."""
-    global _SNMP_ENGINE
-    
-    async with _ENGINE_LOCK:
-        if _SNMP_ENGINE is None:
-            # Create engine in executor to avoid blocking
-            def _create_engine():
-                return SnmpEngine()
-            
-            _SNMP_ENGINE = await hass.async_add_executor_job(_create_engine)
-            _LOGGER.debug("SNMP engine created")
-    
-    return _SNMP_ENGINE
+def _prewarm_plugins() -> None:
+    """Pre-discover puresnmp plugins and patch module-level create functions."""
+    from puresnmp.exc import UnknownMessageProcessingModel, UnknownSecurityModel
+    from puresnmp.plugins import mpm as _mpm, security as _sec
+    from puresnmp.plugins.pluginbase import Loader, discover_plugins
+
+    _mpm_loader = Loader("puresnmp_plugins.mpm", _mpm.is_valid_mpm_plugin)
+    _mpm_loader.discovered_plugins = discover_plugins(
+        "puresnmp_plugins.mpm", _mpm.is_valid_mpm_plugin
+    )
+
+    def _cached_mpm_create(identifier, transport_handler, lcd):
+        result = _mpm_loader.create(identifier)
+        if result is None:
+            raise UnknownMessageProcessingModel(
+                "puresnmp_plugins.mpm",
+                identifier,
+                sorted(_mpm_loader.discovered_plugins.keys()),
+            )
+        return result.create(transport_handler, lcd)  # type: ignore
+
+    _mpm.create = _cached_mpm_create  # type: ignore[assignment]
+
+    _sec_loader = Loader("puresnmp_plugins.security", _sec.is_valid_sec_plugin)
+    _sec_loader.discovered_plugins = discover_plugins(
+        "puresnmp_plugins.security", _sec.is_valid_sec_plugin
+    )
+
+    def _cached_sec_create(identifier):
+        result = _sec_loader.create(identifier)
+        if result is None:
+            raise UnknownSecurityModel(
+                "puresnmp_plugins.security",
+                identifier,
+                sorted(_sec_loader.discovered_plugins.keys()),
+            )
+        return result.create()  # type: ignore
+
+    _sec.create = _cached_sec_create  # type: ignore[assignment]
+
+    # The mpm plugin modules captured security.create at import time via
+    # ``from puresnmp.plugins.security import create as create_sm``. Patching
+    # _sec.create doesn't reach those; patch each mpm plugin module directly.
+    import puresnmp_plugins.mpm.v1 as _v1
+    import puresnmp_plugins.mpm.v2c as _v2c
+
+    _v1.create_sm = _cached_sec_create  # type: ignore[attr-defined]
+    _v2c.create_sm = _cached_sec_create  # type: ignore[attr-defined]
+
+
+async def async_prewarm_plugins(hass) -> None:
+    """Run plugin pre-warm exactly once per process lifetime."""
+    global _PLUGINS_PREWARMED
+    if _PLUGINS_PREWARMED:
+        return
+    async with _PREWARM_LOCK:
+        if _PLUGINS_PREWARMED:
+            return
+        await hass.async_add_executor_job(_prewarm_plugins)
+        _PLUGINS_PREWARMED = True
+        _LOGGER.debug("puresnmp plugins pre-loaded")
+
+
+# ── Credentials / transport helpers ──────────────────────────────────────────
+def _credentials(mp_model: int, community: str):
+    """Return puresnmp credentials for the given SNMP mpModel (0=v1, 1=v2c)."""
+    return V1(community) if mp_model == 0 else V2C(community)
+
+
+def _make_sender(timeout: int, retries: int):
+    """Return a puresnmp sender with custom timeout and retry settings."""
+    return partial(send_udp, timeout=timeout, retries=retries)
+
+
+def _value_to_str(value) -> str:
+    """Convert a puresnmp value to a string.
+
+    Matches the format pysnmp prettyPrint() produced so existing parsers
+    (sensor.py, discover_physical_ports) continue to work unchanged:
+    - OctetString of printable ASCII  → decoded text (e.g. "Port 1")
+    - OctetString of binary bytes     → "0x<hex>" (e.g. "0x1c28afc34624")
+    - IpAddress                       → "192.168.1.1"
+    - Integer / Counter / TimeTicks   → plain decimal string
+    - ObjectIdentifier                → "1.3.6.1.2.1.26.4.35"
+    """
+    if value is None:
+        return ""
+    if isinstance(value, OctetString):
+        raw = value.value
+        if not raw:
+            return ""
+        if all(0x20 <= b < 0x7F for b in raw):
+            return raw.decode("ascii")
+        return "0x" + raw.hex()
+    if isinstance(value, ObjectIdentifier):
+        return str(value)
+    inner = getattr(value, "value", value)
+    return str(inner)
 
 
 async def async_snmp_get(
@@ -161,47 +278,25 @@ async def async_snmp_get(
     retries: int = 3,
     mp_model: int = 1,
 ) -> str | None:
-    """Ultra-reliable async SNMP GET."""
+    """Async SNMP GET for a single OID. Returns None on any failure."""
     if not oid or not oid.strip():
         return None
-    
-    engine = await _ensure_engine(hass)
-    transport = None
-    
+
+    await async_prewarm_plugins(hass)
+
     try:
-        transport = await UdpTransportTarget.create((host, snmp_port))
-        transport.timeout = timeout
-        transport.retries = retries
-        obj_identity = ObjectIdentity(oid)
-        
-        error_indication, error_status, error_index, var_binds = await get_cmd(
-            engine,
-            CommunityData(community, mpModel=mp_model),
-            transport,
-            ContextData(),
-            ObjectType(obj_identity),
+        client = Client(
+            host,
+            _credentials(mp_model, community),
+            port=snmp_port,
+            sender=_make_sender(timeout, retries),
         )
-
-        if error_indication:
-            if "timeout" in str(error_indication).lower():
-                _LOGGER.debug("SNMP GET timeout: %s (oid=%s)", host, oid)
-            else:
-                _LOGGER.debug("SNMP GET error indication: %s", error_indication)
-            return None
-
-        if error_status:
-            msg = error_status.prettyPrint()
-            if "noSuchName" in msg or "noSuchObject" in msg:
-                return None
-            _LOGGER.debug("SNMP GET error status: %s", msg)
-            return None
-
-        return var_binds[0][1].prettyPrint() if var_binds else None
-
+        value = await client.get(ObjectIdentifier(oid.strip()))
+        return _value_to_str(value)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        _LOGGER.debug("SNMP GET exception on %s (oid=%s): %s", host, oid, exc)
+        _LOGGER.debug("SNMP GET failed on %s (oid=%s): %s", host, oid, exc)
         return None
 
 
@@ -215,62 +310,39 @@ async def async_snmp_walk(
     retries: int = 3,
     mp_model: int = 1,
 ) -> dict[str, str]:
-    """
-    Async SNMP WALK using the high-level walkCmd.
-    Returns {full_oid: value} for all OIDs under base_oid.
+    """Async SNMP walk. Returns {full_oid_str: value_str} for all OIDs under base_oid.
+
+    Uses GETBULK for SNMPv2c, falls back to GETNEXT for SNMPv1.
     """
     if not base_oid or not base_oid.strip():
         return {}
 
-    engine = await _ensure_engine(hass)
+    await async_prewarm_plugins(hass)
+
+    base = base_oid.strip()
     results: dict[str, str] = {}
-    transport = None
-
     try:
-        # Create and configure transport
-        transport = await UdpTransportTarget.create((host, snmp_port))
-        transport.timeout = timeout
-        transport.retries = retries
-
-        # Use walk_cmd for the operation
-        obj_identity = ObjectIdentity(base_oid)
-        iterator = walk_cmd(
-            engine,
-            CommunityData(community, mpModel=mp_model),
-            transport,
-            ContextData(),
-            ObjectType(obj_identity),
-            lexicographicMode=False,
-            ignoreNonIncreasingOid=True,
+        client = Client(
+            host,
+            _credentials(mp_model, community),
+            port=snmp_port,
+            sender=_make_sender(timeout, retries),
         )
-        
-        try:
-            async for error_indication, error_status, error_index, var_binds in iterator:
-                if error_indication:
-                    _LOGGER.debug("SNMP WALK error: %s", error_indication)
-                    break
-                
-                if error_status:
-                    _LOGGER.debug("SNMP WALK error status: %s", error_status.prettyPrint())
-                    break
-    
-                for var_bind in var_binds:
-                    oid, value = var_bind
-                    oid_str = str(oid)
-                    # Double-check we are still in the tree
-                    if not oid_str.startswith(base_oid):
-                        return results
-                    results[oid_str] = value.prettyPrint()
-        except asyncio.CancelledError:
-            raise
-        except Exception as iter_err:
-            _LOGGER.debug("SNMP WALK iterator failed on %s (oid=%s): %s", host, base_oid, iter_err)
-    
+        oid_obj = ObjectIdentifier(base)
+        walker = (
+            client.walk([oid_obj])
+            if mp_model == 0
+            else client.bulkwalk([oid_obj], bulk_size=25)
+        )
+        async for vb in walker:
+            oid_str = str(vb.oid)
+            if not oid_str.startswith(base):
+                break
+            results[oid_str] = _value_to_str(vb.value)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        _LOGGER.debug("SNMP WALK failed on %s (%s): %s", host, base_oid, exc)
-    
+        _LOGGER.debug("SNMP WALK failed on %s (%s): %s", host, base, exc)
     return results
 
 
@@ -305,8 +377,14 @@ async def async_snmp_bulk(
     # Perform parallel GET only on valid OIDs
     async def _get_one(oid: str):
         return await async_snmp_get(
-            hass, host, community, snmp_port, oid,
-            timeout=timeout, retries=retries, mp_model=mp_model
+            hass,
+            host,
+            community,
+            snmp_port,
+            oid,
+            timeout=timeout,
+            retries=retries,
+            mp_model=mp_model,
         )
 
     valid_results = await asyncio.gather(*[_get_one(oid) for oid in filtered_oids])
@@ -346,28 +424,46 @@ async def discover_physical_ports(
         if not descr_data:
             _LOGGER.debug("discover_physical_ports: no ifDescr data from %s", host)
             return {}
-        
-        _LOGGER.debug("ifDescr data from %s: %d interfaces found", host, len(descr_data))
+
+        _LOGGER.debug(
+            "ifDescr data from %s: %d interfaces found", host, len(descr_data)
+        )
 
         # Step 2: Get speed, ifType, and MAU type (parallel)
         speed_data, high_speed_data, type_data, mau_data = await asyncio.gather(
-            async_snmp_walk(hass, host, community, snmp_port, CONF_OID_IFSPEED, mp_model=mp_model),
-            async_snmp_walk(hass, host, community, snmp_port, CONF_OID_IFHIGHSPEED, mp_model=mp_model),
-            async_snmp_walk(hass, host, community, snmp_port, CONF_OID_IFTYPE, mp_model=mp_model),
-            async_snmp_walk(hass, host, community, snmp_port, CONF_OID_IFMAUTYPE, mp_model=mp_model),
+            async_snmp_walk(
+                hass, host, community, snmp_port, CONF_OID_IFSPEED, mp_model=mp_model
+            ),
+            async_snmp_walk(
+                hass,
+                host,
+                community,
+                snmp_port,
+                CONF_OID_IFHIGHSPEED,
+                mp_model=mp_model,
+            ),
+            async_snmp_walk(
+                hass, host, community, snmp_port, CONF_OID_IFTYPE, mp_model=mp_model
+            ),
+            async_snmp_walk(
+                hass, host, community, snmp_port, CONF_OID_IFMAUTYPE, mp_model=mp_model
+            ),
         )
         _LOGGER.debug("MAU-MIB data from %s: %d entries", host, len(mau_data))
-        
+
         # Step 4: Get sysDescr for manufacturer info (scalar OID — use GET not WALK)
-        sys_descr = await async_snmp_get(
-            hass, host, community, snmp_port, CONF_OID_SYSDESCR, mp_model=mp_model
-        ) or "Unknown"
+        sys_descr = (
+            await async_snmp_get(
+                hass, host, community, snmp_port, CONF_OID_SYSDESCR, mp_model=mp_model
+            )
+            or "Unknown"
+        )
         _LOGGER.debug("sysDescr from %s: %s", host, sys_descr)
-        
+
         # Extract manufacturer from sysDescr
         manufacturer = _extract_manufacturer(sys_descr)
-        
-        sorted_oids = sorted(descr_data.keys(), key=lambda x: int(x.split('.')[-1]))
+
+        sorted_oids = sorted(descr_data.keys(), key=lambda x: int(x.split(".")[-1]))
         for oid_str in sorted_oids:
             descr_raw = descr_data[oid_str]
             try:
@@ -377,17 +473,19 @@ async def discover_physical_ports(
                 descr_lower = descr_clean.lower()
             except (ValueError, IndexError, AttributeError):
                 continue
-            
+
             # === STEP 1: Reject obvious virtual/junk interfaces ===
             if _is_virtual_interface(descr_lower):
                 continue
-            
+
             # === STEP 2: Accept anything that looks like a real port ===
-            is_likely_physical = _is_physical_interface(descr_lower, descr_clean, if_index)
-            
+            is_likely_physical = _is_physical_interface(
+                descr_lower, descr_clean, if_index
+            )
+
             if not is_likely_physical:
                 continue
-            
+
             # === STEP 3: Fiber vs Copper detection ===
             # Primary: MAU-MIB (RFC 3636/4836) — authoritative when available
             # Fallback: ifType + description heuristics
@@ -408,13 +506,13 @@ async def discover_physical_ports(
                 is_sfp, detection = _detect_sfp_port(if_type, descr_lower, manufacturer)
                 is_copper = not is_sfp
                 port_type = "unknown"
-            
+
             # === STEP 4: Port speed ===
             speed_mbps = _get_port_speed(speed_data, high_speed_data, if_index)
-            
+
             # === STEP 5: Friendly name generation ===
             name = _generate_port_name(descr_clean, descr_lower, logical_port)
-            
+
             mapping[logical_port] = {
                 "if_index": if_index,
                 "name": name,
@@ -427,15 +525,19 @@ async def discover_physical_ports(
                 "port_type": port_type,
             }
             logical_port += 1
-        
+
         copper_count = sum(1 for p in mapping.values() if p["is_copper"])
         sfp_count = len(mapping) - copper_count
         _LOGGER.info(
             "Auto-discovered %d physical ports on %s → %d copper, %d SFP/SFP+ | Manufacturer: %s",
-            len(mapping), host, copper_count, sfp_count, manufacturer
+            len(mapping),
+            host,
+            copper_count,
+            sfp_count,
+            manufacturer,
         )
         return mapping
-        
+
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -447,38 +549,62 @@ def _extract_manufacturer(sys_descr: str) -> str:
     """Extract manufacturer name from sysDescr string."""
     if not sys_descr or sys_descr == "Unknown":
         return "Unknown"
-    
+
     # Common patterns: "H3C S3100-26C, Software Version..." → "H3C"
     first_word = sys_descr.split(" ")[0]
-    
+
     # Reject common non-manufacturer words
     if first_word.lower() in ("version", "software", "hardware", "release", "build"):
         return "Unknown"
-    
+
     return first_word
 
 
 def _is_virtual_interface(descr_lower: str) -> bool:
     """Check if interface description indicates a virtual interface."""
     # Quick rejections first
-    if any(x in descr_lower for x in ["cpu interface", "link aggregate", "logical-int"]):
+    if any(
+        x in descr_lower for x in ["cpu interface", "link aggregate", "logical-int"]
+    ):
         return True
-    
+
     # Patterns that should match at word start
     word_start_bad = [
-        r'\bvlan', r'\btun', r'\bgre', r'\bimq', r'\bifb',
-        r'\berspan', r'\bip_vti', r'\bip6_vti', r'\bip6tnl',
-        r'\bip6gre', r'\bwds', r'\bloopback', r'\bpo\d+'
+        r"\bvlan",
+        r"\btun",
+        r"\bgre",
+        r"\bimq",
+        r"\bifb",
+        r"\berspan",
+        r"\bip_vti",
+        r"\bip6_vti",
+        r"\bip6tnl",
+        r"\bip6gre",
+        r"\bwds",
+        r"\bloopback",
+        r"\bpo\d+",
     ]
     if any(re.search(pattern, descr_lower) for pattern in word_start_bad):
         return True
-    
+
     # Patterns that need exact word match
     exact_word_bad = [
-        r'\blo\b', r'\bbr\b', r'\bdummy\b', r'\bwlan\b',
-        r'\bath\b', r'\bwifi\b', r'\bwl\b', r'\bbond\b',
-        r'\bveth\b', r'\bbridge\b', r'\bvirtual\b', r'\bnull\b',
-        r'\bsit\b', r'\bipip\b', r'\bbcmsw\b', r'\bspu\b'
+        r"\blo\b",
+        r"\bbr\b",
+        r"\bdummy\b",
+        r"\bwlan\b",
+        r"\bath\b",
+        r"\bwifi\b",
+        r"\bwl\b",
+        r"\bbond\b",
+        r"\bveth\b",
+        r"\bbridge\b",
+        r"\bvirtual\b",
+        r"\bnull\b",
+        r"\bsit\b",
+        r"\bipip\b",
+        r"\bbcmsw\b",
+        r"\bspu\b",
     ]
     return any(re.search(pattern, descr_lower) for pattern in exact_word_bad)
 
@@ -488,29 +614,45 @@ def _is_physical_interface(descr_lower: str, descr_clean: str, if_index: int) ->
     # Universal exclusion of management/console ports
     if any(k in descr_lower for k in ["mgmt", "management", "console"]):
         return False
-        
+
     # Specifically catch Cisco/Standard management ports like GigabitEthernet0/0
-    if re.search(r'ethernet0/0$', descr_lower):
+    if re.search(r"ethernet0/0$", descr_lower):
         return False
-    
+
     # Check for common physical port indicators
     is_likely_physical = (
-        any(k in descr_lower for k in [
-            "port", "eth", "ge.", "swp", "xe.", "lan", "wan", "sfp",
-            "gigabit", "fasteth", "10g", "slot:", "level",
-        ]) or
-        re.match(r'^gigabithethernet\d+', descr_lower) or
-        re.match(r'^[pg]\d+$', descr_lower) or
-        re.match(r'^[a-z]\d+$', descr_lower) or  # e.g. A1, A2, A3, A4 (uplink/SFP ports)
-        (descr_lower.startswith("slot:") and "port:" in descr_lower)
+        any(
+            k in descr_lower
+            for k in [
+                "port",
+                "eth",
+                "ge.",
+                "swp",
+                "xe.",
+                "lan",
+                "wan",
+                "sfp",
+                "gigabit",
+                "fasteth",
+                "10g",
+                "slot:",
+                "level",
+            ]
+        )
+        or re.match(r"^gigabithethernet\d+", descr_lower)
+        or re.match(r"^[pg]\d+$", descr_lower)
+        or re.match(
+            r"^[a-z]\d+$", descr_lower
+        )  # e.g. A1, A2, A3, A4 (uplink/SFP ports)
+        or (descr_lower.startswith("slot:") and "port:" in descr_lower)
     )
-    
+
     # Special case: single-digit descriptions
     if descr_clean.isdigit():
         if if_index >= 1000:
             return False
         return True
-    
+
     return is_likely_physical
 
 
@@ -520,8 +662,8 @@ def _get_interface_type(type_data: dict, if_index: int) -> int:
         if t_oid.endswith(f".{if_index}"):
             try:
                 # Handle types like "ethernetCsmacd(6)"
-                if '(' in str(t_val):
-                    match_type = re.search(r'\((\d+)\)', str(t_val))
+                if "(" in str(t_val):
+                    match_type = re.search(r"\((\d+)\)", str(t_val))
                     return int(match_type.group(1)) if match_type else 0
                 return int(t_val)
             except (ValueError, TypeError):
@@ -529,13 +671,15 @@ def _get_interface_type(type_data: dict, if_index: int) -> int:
     return 0
 
 
-def _detect_sfp_port(if_type: int, descr_lower: str, manufacturer: str = "") -> tuple[bool, str]:
+def _detect_sfp_port(
+    if_type: int, descr_lower: str, manufacturer: str = ""
+) -> tuple[bool, str]:
     """Detect if port is fiber based on ifType and description keywords.
     Only used when MAU-MIB data is unavailable.
     """
     # HP/Aruba: uplink ports named A1-A4 are SFP slots
     if any(m in manufacturer.lower() for m in HP_MANUFACTURER_KEYWORDS):
-        if re.match(r'^[a-z]\d+$', descr_lower):
+        if re.match(r"^[a-z]\d+$", descr_lower):
             return True, "hp_uplink_name"
 
     # Netgear 10G special case
@@ -543,10 +687,14 @@ def _detect_sfp_port(if_type: int, descr_lower: str, manufacturer: str = "") -> 
         return True, "netgear_10g_sfp"
 
     # Cisco stack/modular slot: GigabitEthernetX/Y/Z where Y > 0 is a module slot
-    cisco_slot_match = re.search(r'gigabithethernet(\d+)/(\d+)/(\d+)', descr_lower)
+    cisco_slot_match = re.search(r"gigabithethernet(\d+)/(\d+)/(\d+)", descr_lower)
     if cisco_slot_match:
         module_slot = int(cisco_slot_match.group(2))
-        return (True, "cisco_module_sfp") if module_slot > 0 else (False, "cisco_fixed_copper")
+        return (
+            (True, "cisco_module_sfp")
+            if module_slot > 0
+            else (False, "cisco_fixed_copper")
+        )
 
     # IANA ifType: 56=fibreChannel, 171=pos (Packet over SONET/SDH)
     # Verified against IANA ifType registry — 161=LAG and 172=DVB excluded
@@ -555,11 +703,29 @@ def _detect_sfp_port(if_type: int, descr_lower: str, manufacturer: str = "") -> 
 
     # Description keyword matching
     # "10gbase-t" is copper — only match known fiber 10G variants explicitly
-    is_fiber_by_name = any(k in descr_lower for k in [
-        "sfp", "fiber", "fibre", "optical", "1000base-x",
-        "10gbase-sr", "10gbase-lr", "10gbase-er", "10gbase-lrm", "10gbase-zr",
-        "mini-gbic", "sfp+", "sfp28", "25g", "40g", "100g", "qsfp", "fortygigabit",
-    ])
+    is_fiber_by_name = any(
+        k in descr_lower
+        for k in [
+            "sfp",
+            "fiber",
+            "fibre",
+            "optical",
+            "1000base-x",
+            "10gbase-sr",
+            "10gbase-lr",
+            "10gbase-er",
+            "10gbase-lrm",
+            "10gbase-zr",
+            "mini-gbic",
+            "sfp+",
+            "sfp28",
+            "25g",
+            "40g",
+            "100g",
+            "qsfp",
+            "fortygigabit",
+        ]
+    )
     if is_fiber_by_name:
         return True, "name_keyword"
 
@@ -575,7 +741,7 @@ def _get_port_speed(speed_data: dict, high_speed_data: dict, if_index: int) -> i
             return int(raw_high)
         except (ValueError, TypeError):
             pass
-    
+
     # Fall back to regular speed (ifSpeed)
     raw_speed = speed_data.get(f"{CONF_OID_IFSPEED}.{if_index}")
     if raw_speed:
@@ -583,7 +749,7 @@ def _get_port_speed(speed_data: dict, high_speed_data: dict, if_index: int) -> i
             return int(raw_speed) // 1_000_000
         except (ValueError, TypeError):
             pass
-    
+
     return 0
 
 
@@ -594,25 +760,25 @@ def _generate_port_name(descr_clean: str, descr_lower: str, logical_port: int) -
         match = re.search(r"port:\s*(\d+)", descr_lower, re.IGNORECASE)
         if match:
             return f"Port {match.group(1)}"
-    
+
     # Pure numeric description
     if descr_clean.isdigit():
         return f"Port {descr_clean}"
-    
+
     # Cisco GigabitEthernet format
     if "gigabithethernet" in descr_lower:
-        match = re.search(r'(\d+)$', descr_lower)
+        match = re.search(r"(\d+)$", descr_lower)
         if match:
             return f"Port {match.group(1)}"
         return descr_clean
-    
+
     # Already has "port" in name
     if "port " in descr_lower:
         return descr_clean
-    
+
     # Standard interface names
     if descr_lower.startswith(("eth", "ge.", "swp", "xe.")):
         return descr_clean
-    
+
     # Fallback
     return f"Port {logical_port}"
