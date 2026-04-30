@@ -22,17 +22,26 @@ CONF_OID_POE_POWER: Final = "oid_poe_power"
 CONF_OID_POE_STATUS: Final = "oid_poe_status"
 CONF_OID_POE_CLASS: Final = "oid_poe_class"
 CONF_OID_CUSTOM: Final = "oid_custom"
-CONF_OID_DOT1D_BASE_PORT_IFINDEX: Final = "1.3.6.1.2.1.17.1.4.1.2"  # bridge port → ifIndex
+# bridge port → ifIndex
+CONF_OID_DOT1D_BASE_PORT_IFINDEX: Final = "1.3.6.1.2.1.17.1.4.1.2"
 
 # HP/Aruba/ProCurve auto-detected OIDs (used when cpu/memory not manually configured)
-HP_OID_CPU_REALTIME: Final = "1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"     # real-time CPU % — works on HP 2530/2520 and Aruba 2930M
-HP_OID_MEMORY_USED: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.6.1" # bytes used
-HP_OID_MEMORY_TOTAL: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.5.1" # bytes total
-HP_OID_POE_POWER: Final = "1.3.6.1.4.1.11.2.14.11.1.9.1.1.1.8"           # actual per-port draw (mW) — newer HP/Aruba (2530, 2930)
-HP_OID_POE_POWER_LEGACY: Final = "1.3.6.1.4.1.11.2.14.11.1.9.1.1.1.3"   # actual per-port draw (mW) — older HP (2520)
-HP_OID_POE_STATUS: Final = "1.3.6.1.2.1.105.1.1.1.6"                     # pethPsePortOperStatus (RFC 3621)
-HP_OID_POE_CLASS: Final = "1.3.6.1.2.1.105.1.1.1.10"                     # pethPsePortPowerClassifications (RFC 3621)
-HP_OID_FIRMWARE: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.3.0"             # hpicfBasicRunningRevision (running firmware version)
+# real-time CPU % — works on HP 2530/2520 and Aruba 2930M
+HP_OID_CPU_REALTIME: Final = "1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"
+# bytes used
+HP_OID_MEMORY_USED: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.6.1"
+# bytes total
+HP_OID_MEMORY_TOTAL: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.5.1"
+# actual per-port draw (mW) — newer HP/Aruba (2530, 2930)
+HP_OID_POE_POWER: Final = "1.3.6.1.4.1.11.2.14.11.1.9.1.1.1.8"
+# actual per-port draw (mW) — older HP (2520)
+HP_OID_POE_POWER_LEGACY: Final = "1.3.6.1.4.1.11.2.14.11.1.9.1.1.1.3"
+# pethPsePortOperStatus (RFC 3621)
+HP_OID_POE_STATUS: Final = "1.3.6.1.2.1.105.1.1.1.6"
+# pethPsePortPowerClassifications (RFC 3621)
+HP_OID_POE_CLASS: Final = "1.3.6.1.2.1.105.1.1.1.10"
+# hpicfBasicRunningRevision (running firmware version)
+HP_OID_FIRMWARE: Final = "1.3.6.1.4.1.11.2.14.11.5.1.1.3.0"
 HP_MANUFACTURER_KEYWORDS: Final = ("hp", "aruba", "procurve", "hewlett")
 CONF_OID_PORT_CUSTOM: Final = "oid_port_custom"
 CONF_OID_CPU: Final = "oid_cpu"
@@ -45,24 +54,40 @@ CONF_OID_IDESCR: Final = "1.3.6.1.2.1.2.2.1.2"
 CONF_OID_IFTYPE: Final = "1.3.6.1.2.1.2.2.1.3"
 CONF_OID_IFSPEED: Final = "1.3.6.1.2.1.2.2.1.5"
 CONF_OID_IFHIGHSPEED: Final = "1.3.6.1.2.1.31.1.1.1.15"
-CONF_OID_IFHCINOCTETS: Final = "1.3.6.1.2.1.31.1.1.1.6"    # ifHCInOctets (64-bit)
-CONF_OID_IFHCOUTOCTETS: Final = "1.3.6.1.2.1.31.1.1.1.10"  # ifHCOutOctets (64-bit)
-CONF_OID_IFINERRORS: Final = "1.3.6.1.2.1.2.2.1.14"        # ifInErrors
-CONF_OID_IFOUTERRORS: Final = "1.3.6.1.2.1.2.2.1.20"       # ifOutErrors
-CONF_OID_IFINDISCARDS: Final = "1.3.6.1.2.1.2.2.1.13"      # ifInDiscards
-CONF_OID_IFOUTDISCARDS: Final = "1.3.6.1.2.1.2.2.1.19"     # ifOutDiscards
-CONF_OID_IFADMINSTATUS: Final = "1.3.6.1.2.1.2.2.1.7"      # ifAdminStatus (1=up, 2=down, 3=testing)
-CONF_OID_IFLASTCHANGE: Final = "1.3.6.1.2.1.2.2.1.9"       # ifLastChange (TimeTicks at last state change)
-CONF_OID_SYSUPTIME: Final = "1.3.6.1.2.1.1.3.0"            # sysUpTime (TimeTicks since boot)
-CONF_OID_POE_BUDGET_TOTAL: Final = "1.3.6.1.2.1.105.1.3.1.1.2"    # pethMainPsePower (watts)
-CONF_OID_POE_BUDGET_CONSUMED: Final = "1.3.6.1.2.1.105.1.3.1.1.3" # pethMainPseConsumptionPower (watts)
+# ifHCInOctets (64-bit)
+CONF_OID_IFHCINOCTETS: Final = "1.3.6.1.2.1.31.1.1.1.6"
+# ifHCOutOctets (64-bit)
+CONF_OID_IFHCOUTOCTETS: Final = "1.3.6.1.2.1.31.1.1.1.10"
+# ifInErrors
+CONF_OID_IFINERRORS: Final = "1.3.6.1.2.1.2.2.1.14"
+# ifOutErrors
+CONF_OID_IFOUTERRORS: Final = "1.3.6.1.2.1.2.2.1.20"
+# ifInDiscards
+CONF_OID_IFINDISCARDS: Final = "1.3.6.1.2.1.2.2.1.13"
+# ifOutDiscards
+CONF_OID_IFOUTDISCARDS: Final = "1.3.6.1.2.1.2.2.1.19"
+# ifAdminStatus (1=up, 2=down, 3=testing)
+CONF_OID_IFADMINSTATUS: Final = "1.3.6.1.2.1.2.2.1.7"
+# ifLastChange (TimeTicks at last state change)
+CONF_OID_IFLASTCHANGE: Final = "1.3.6.1.2.1.2.2.1.9"
+# sysUpTime (TimeTicks since boot)
+CONF_OID_SYSUPTIME: Final = "1.3.6.1.2.1.1.3.0"
+# pethMainPsePower (watts)
+CONF_OID_POE_BUDGET_TOTAL: Final = "1.3.6.1.2.1.105.1.3.1.1.2"
+# pethMainPseConsumptionPower (watts)
+CONF_OID_POE_BUDGET_CONSUMED: Final = "1.3.6.1.2.1.105.1.3.1.1.3"
 CONF_OID_SYSDESCR: Final = "1.3.6.1.2.1.1.1.0"
 CONF_OID_SYSNAME: Final = "1.3.6.1.2.1.1.5.0"
-CONF_OID_IFMAUTYPE: Final = "1.3.6.1.2.1.26.2.1.1.3"  # MAU-MIB ifMauType (RFC 4836)
-CONF_OID_ENT_SENSOR_TYPE: Final = "1.3.6.1.2.1.99.1.1.1.1"     # entPhySensorType (RFC 3433)
-CONF_OID_ENT_SENSOR_VALUE: Final = "1.3.6.1.2.1.99.1.1.1.4"    # entPhySensorValue
-CONF_OID_ENT_SENSOR_OPSTATUS: Final = "1.3.6.1.2.1.99.1.1.1.5" # entPhySensorOperStatus (1=ok, 2=unavailable)
-CONF_OID_ENT_PHYSICAL_NAME: Final = "1.3.6.1.2.1.47.1.1.1.1.7" # entPhysicalName (ENTITY-MIB)
+# MAU-MIB ifMauType (RFC 4836)
+CONF_OID_IFMAUTYPE: Final = "1.3.6.1.2.1.26.2.1.1.3"
+# entPhySensorType (RFC 3433)
+CONF_OID_ENT_SENSOR_TYPE: Final = "1.3.6.1.2.1.99.1.1.1.1"
+# entPhySensorValue
+CONF_OID_ENT_SENSOR_VALUE: Final = "1.3.6.1.2.1.99.1.1.1.4"
+# entPhySensorOperStatus (1=ok, 2=unavailable)
+CONF_OID_ENT_SENSOR_OPSTATUS: Final = "1.3.6.1.2.1.99.1.1.1.5"
+# entPhysicalName (ENTITY-MIB)
+CONF_OID_ENT_PHYSICAL_NAME: Final = "1.3.6.1.2.1.47.1.1.1.1.7"
 
 SNMP_VERSION_TO_MP_MODEL = {
     "v1": 0,
@@ -71,29 +96,32 @@ SNMP_VERSION_TO_MP_MODEL = {
 }
 DEFAULT_SNMP_PORT: Final = 161
 # Default monitored ports (1–28 is safe for most 24+4 switches)
-DEFAULT_PORTS: Final = list(range(1, 9)) # remove 29 as this is too many for most users
+# (kept at 8 — 29 is too many for most users)
+DEFAULT_PORTS: Final = list(range(1, 9))
 
 # Default per-port OIDs (standard + common working ones)
 DEFAULT_BASE_OIDS: Final = {
-    "rx": "1.3.6.1.2.1.2.2.1.10",        # ifInOctets (32-bit)
-    "tx": "1.3.6.1.2.1.2.2.1.16",        # ifOutOctets (32-bit)
-    "status": "1.3.6.1.2.1.2.2.1.8",     # ifOperStatus
-    "speed": "1.3.6.1.2.1.2.2.1.5",      # ifSpeed
-    "name": "1.3.6.1.2.1.31.1.1.1.18",   # ifAlias (modern description)
-    "vlan": "",                          # User must set per-brand (e.g. Q-BRIDGE-MIB or private)
-    "poe_power": "",                     # User must set (common: Cisco/Zyxel/TP-Link)
-    "poe_status": "",                    # User must set
-    "poe_class": "",                     # 802.3af/at class (1=class0…5=class4). Standard: 1.3.6.1.2.1.105.1.1.1.10
-    "port_custom": "",                   # User must set
+    "rx": "1.3.6.1.2.1.2.2.1.10",  # ifInOctets (32-bit)
+    "tx": "1.3.6.1.2.1.2.2.1.16",  # ifOutOctets (32-bit)
+    "status": "1.3.6.1.2.1.2.2.1.8",  # ifOperStatus
+    "speed": "1.3.6.1.2.1.2.2.1.5",  # ifSpeed
+    "name": "1.3.6.1.2.1.31.1.1.1.18",  # ifAlias (modern description)
+    "vlan": "",  # User must set per-brand (e.g. Q-BRIDGE-MIB or private)
+    "poe_power": "",  # User must set (common: Cisco/Zyxel/TP-Link)
+    "poe_status": "",  # User must set
+    # 802.3af/at class (1=class0…5=class4). Standard: 1.3.6.1.2.1.105.1.1.1.10
+    "poe_class": "",
+    "port_custom": "",  # User must set
 }
 
 # Default system-level OIDs (most common working ones)
 DEFAULT_SYSTEM_OIDS: Final = {
-    "cpu": "",                           # Usually private — user sets
-    "memory": "",                        # Usually private (used bytes if memory_total set, else %)
-    "memory_total": "",                  # Optional: total bytes; if set, memory% = (memory/memory_total)*100
-    "firmware": "",                      # Usually private
-    "hostname": "1.3.6.1.2.1.1.5.0",     # sysName — works everywhere
-    "uptime": "1.3.6.1.2.1.1.3.0",       # sysUpTime — universal
-    "custom": "",                     # user sets
+    "cpu": "",  # Usually private — user sets
+    "memory": "",  # Usually private (used bytes if memory_total set, else %)
+    # Optional: total bytes; if set, memory% = (memory/memory_total)*100
+    "memory_total": "",
+    "firmware": "",  # Usually private
+    "hostname": "1.3.6.1.2.1.1.5.0",  # sysName — works everywhere
+    "uptime": "1.3.6.1.2.1.1.3.0",  # sysUpTime — universal
+    "custom": "",  # user sets
 }

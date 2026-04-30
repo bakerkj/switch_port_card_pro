@@ -1,10 +1,12 @@
 """Config Flow for Switch Port Card Pro."""
+
 from __future__ import annotations
 
 import logging
 from typing import Any
 
 import voluptuous as vol
+
 # import homeassistant.helpers.selector as selector
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
@@ -13,7 +15,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import config_validation as cv
 from homeassistant.core import callback
 
-from .snmp_helper import async_snmp_get 
+from .snmp_helper import async_snmp_get
 from .const import (
     DOMAIN,
     CONF_COMMUNITY,
@@ -35,7 +37,9 @@ STEP_USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): str,
         vol.Required(CONF_COMMUNITY, default="public"): str,
-        vol.Required(CONF_SNMP_PORT, default=DEFAULT_SNMP_PORT): vol.All(vol.Coerce(int), vol.Range(min=1, max=10000)),
+        vol.Required(CONF_SNMP_PORT, default=DEFAULT_SNMP_PORT): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=10000)
+        ),
     }
 )
 
@@ -81,7 +85,7 @@ class SwitchPortCardProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_SNMP_PORT: user_input[CONF_SNMP_PORT],
                     },
                     options={
-    #                    CONF_PORTS: DEFAULT_PORTS, # removed for auto port detection
+                        #                    CONF_PORTS: DEFAULT_PORTS, # removed for auto port detection
                         CONF_INCLUDE_VLANS: True,
                         "snmp_version": "v2c",
                         "oid_rx": DEFAULT_BASE_OIDS["rx"],
@@ -111,7 +115,9 @@ class SwitchPortCardProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def _test_connection(self, hass: HomeAssistant, host: str, community: str, snmp_port: int) -> None:
+    async def _test_connection(
+        self, hass: HomeAssistant, host: str, community: str, snmp_port: int
+    ) -> None:
         """Test SNMP connectivity by fetching sysName. Raises ConnectionError if unreachable."""
         result = await async_snmp_get(
             hass,
@@ -160,11 +166,18 @@ class SwitchPortCardProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=vol.Schema({
-                vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, "")): str,
-                vol.Required(CONF_COMMUNITY, default=entry.data.get(CONF_COMMUNITY, "public")): str,
-                vol.Required(CONF_SNMP_PORT, default=entry.data.get(CONF_SNMP_PORT, DEFAULT_SNMP_PORT)): vol.All(vol.Coerce(int), vol.Range(min=1, max=10000)),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, "")): str,
+                    vol.Required(
+                        CONF_COMMUNITY, default=entry.data.get(CONF_COMMUNITY, "public")
+                    ): str,
+                    vol.Required(
+                        CONF_SNMP_PORT,
+                        default=entry.data.get(CONF_SNMP_PORT, DEFAULT_SNMP_PORT),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10000)),
+                }
+            ),
             errors=errors,
         )
 
@@ -180,7 +193,8 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize."""
-     #   self.config_entry = config_entry
+
+    #   self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -196,6 +210,7 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             import re
+
             errors: dict[str, str] = {}
 
             # Validate and strip all OID fields
@@ -238,8 +253,7 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
         return vol.Schema(
             {
                 vol.Optional(
-                    "update_interval",
-                    default=src.get("update_interval", 20)
+                    "update_interval", default=src.get("update_interval", 20)
                 ): cv.positive_int,
                 vol.Optional(
                     CONF_PORTS,
@@ -249,12 +263,10 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                     "re_detect_ports",
                     default=False,
                 ): cv.boolean,
-                
                 vol.Optional(
                     CONF_INCLUDE_VLANS,
                     default=src.get(CONF_INCLUDE_VLANS, True),
                 ): cv.boolean,
-                
                 # --- Port OIDs ---
                 vol.Optional(
                     "oid_rx",
@@ -280,7 +292,6 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                     "oid_vlan",
                     default=src.get("oid_vlan", DEFAULT_BASE_OIDS.get("vlan", "")),
                 ): cv.string,
-
                 # --- System OIDs ---
                 vol.Optional(
                     "oid_cpu",
@@ -288,51 +299,71 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                 ): cv.string,
                 vol.Optional(
                     "oid_firmware",
-                    default=src.get("oid_firmware", DEFAULT_SYSTEM_OIDS.get("firmware", "")),
+                    default=src.get(
+                        "oid_firmware", DEFAULT_SYSTEM_OIDS.get("firmware", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "oid_memory",
-                    default=src.get("oid_memory", DEFAULT_SYSTEM_OIDS.get("memory", "")),
+                    default=src.get(
+                        "oid_memory", DEFAULT_SYSTEM_OIDS.get("memory", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "oid_memory_total",
-                    default=src.get("oid_memory_total", DEFAULT_SYSTEM_OIDS.get("memory_total", "")),
+                    default=src.get(
+                        "oid_memory_total", DEFAULT_SYSTEM_OIDS.get("memory_total", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "oid_hostname",
-                    default=src.get("oid_hostname", DEFAULT_SYSTEM_OIDS.get("hostname", "")),
+                    default=src.get(
+                        "oid_hostname", DEFAULT_SYSTEM_OIDS.get("hostname", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "oid_uptime",
-                    default=src.get("oid_uptime", DEFAULT_SYSTEM_OIDS.get("uptime", "")),
+                    default=src.get(
+                        "oid_uptime", DEFAULT_SYSTEM_OIDS.get("uptime", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "oid_poe_power",
-                    default=src.get("oid_poe_power", DEFAULT_SYSTEM_OIDS.get("poe_power", "")),
+                    default=src.get(
+                        "oid_poe_power", DEFAULT_SYSTEM_OIDS.get("poe_power", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "oid_poe_status",
-                    default=src.get("oid_poe_status", DEFAULT_SYSTEM_OIDS.get("poe_status", "")),
+                    default=src.get(
+                        "oid_poe_status", DEFAULT_SYSTEM_OIDS.get("poe_status", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "oid_poe_class",
-                    default=src.get("oid_poe_class", DEFAULT_BASE_OIDS.get("poe_class", "")),
+                    default=src.get(
+                        "oid_poe_class", DEFAULT_BASE_OIDS.get("poe_class", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "oid_custom",
-                    default=src.get("oid_custom", DEFAULT_SYSTEM_OIDS.get("custom", "")),
+                    default=src.get(
+                        "oid_custom", DEFAULT_SYSTEM_OIDS.get("custom", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "oid_port_custom",
-                    default=src.get("oid_port_custom", DEFAULT_SYSTEM_OIDS.get("port_custom", "")),
+                    default=src.get(
+                        "oid_port_custom", DEFAULT_SYSTEM_OIDS.get("port_custom", "")
+                    ),
                 ): cv.string,
                 vol.Optional(
                     "snmp_version",
                     default=src.get("snmp_version", "v2c"),
                 ): vol.In({"v2c": "v2c", "v1": "v1"}),
-     #           vol.Optional(
-     #               CONF_SFP_PORTS_START, 
-     #               default=25,
-     #           ): vol.All(vol.Coerce(int), vol.Range(min=1, max=52)),
+                #           vol.Optional(
+                #               CONF_SFP_PORTS_START,
+                #               default=25,
+                #           ): vol.All(vol.Coerce(int), vol.Range(min=1, max=52)),
             }
         )
