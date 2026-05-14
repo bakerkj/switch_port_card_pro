@@ -20,6 +20,8 @@ from .const import (
     DOMAIN,
     CONF_COMMUNITY,
     CONF_PORTS,
+    CONF_PRIORITY_PORTS,
+    CONF_FAST_UPDATE_INTERVAL,
     CONF_HOST,
     DEFAULT_PORTS,
     DEFAULT_BASE_OIDS,
@@ -232,6 +234,28 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
             # Convert port strings (from multi-select) to integers for saving
             if CONF_PORTS in user_input and isinstance(user_input[CONF_PORTS], list):
                 user_input[CONF_PORTS] = [int(p) for p in user_input[CONF_PORTS]]
+            if CONF_PRIORITY_PORTS in user_input and isinstance(
+                user_input[CONF_PRIORITY_PORTS], list
+            ):
+                user_input[CONF_PRIORITY_PORTS] = [
+                    int(p) for p in user_input[CONF_PRIORITY_PORTS]
+                ]
+
+            # Validate fast_update_interval: must be < update_interval to be effective.
+            fast = user_input.get(CONF_FAST_UPDATE_INTERVAL, 0) or 0
+            slow = user_input.get("update_interval", current.get("update_interval", 20))
+            try:
+                if int(fast) > 0 and int(fast) >= int(slow):
+                    errors[CONF_FAST_UPDATE_INTERVAL] = "fast_interval_too_high"
+            except (TypeError, ValueError):
+                errors[CONF_FAST_UPDATE_INTERVAL] = "fast_interval_too_high"
+
+            if errors:
+                return self.async_show_form(
+                    step_id="options",
+                    data_schema=self._build_schema(current, user_input),
+                    errors=errors,
+                )
 
             try:
                 new = {**current, **user_input}
@@ -250,15 +274,31 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
         src = {**current, **(overrides or {})}
         ports_dict = {str(i): str(i) for i in range(1, 65)}
         current_ports = [str(p) for p in src.get(CONF_PORTS, DEFAULT_PORTS)]
+        priority_ports_dict = {
+            str(p): str(p) for p in src.get(CONF_PORTS, DEFAULT_PORTS)
+        }
+        current_priority_ports = [
+            str(p)
+            for p in src.get(CONF_PRIORITY_PORTS, [])
+            if str(p) in priority_ports_dict
+        ]
         return vol.Schema(
             {
                 vol.Optional(
                     "update_interval", default=src.get("update_interval", 20)
                 ): cv.positive_int,
                 vol.Optional(
+                    CONF_FAST_UPDATE_INTERVAL,
+                    default=src.get(CONF_FAST_UPDATE_INTERVAL, 0),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
+                vol.Optional(
                     CONF_PORTS,
                     default=current_ports,
                 ): cv.multi_select(ports_dict),
+                vol.Optional(
+                    CONF_PRIORITY_PORTS,
+                    default=current_priority_ports,
+                ): cv.multi_select(priority_ports_dict),
                 vol.Optional(
                     "re_detect_ports",
                     default=False,

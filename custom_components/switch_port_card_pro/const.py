@@ -9,6 +9,8 @@ CONF_HOST: Final = "host"
 CONF_SNMP_PORT = "snmp_port"
 CONF_COMMUNITY: Final = "community"
 CONF_PORTS: Final = "ports"
+CONF_PRIORITY_PORTS: Final = "priority_ports"
+CONF_FAST_UPDATE_INTERVAL: Final = "fast_update_interval"
 CONF_INCLUDE_VLANS: Final = "include_vlans"
 CONF_SFP_PORTS_START = "sfp_ports_start"
 # Option keys (used in config flow)

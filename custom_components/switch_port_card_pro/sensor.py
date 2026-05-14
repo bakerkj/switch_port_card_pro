@@ -85,12 +85,15 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
         snmp_version: str,
         include_vlans: bool,
         update_seconds: int,
+        fast_update_seconds: int | None = None,
+        priority_ports: list[int] | None = None,
     ) -> None:
+        fast_seconds = fast_update_seconds or update_seconds
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN}_{host}",
-            update_interval=timedelta(seconds=update_seconds),
+            update_interval=timedelta(seconds=fast_seconds),
         )
         self.host = host
         self.community = community
@@ -102,11 +105,39 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
         self.mp_model = SNMP_VERSION_TO_MP_MODEL.get(snmp_version, 1)
         self.port_mapping = {}
         self.update_seconds = update_seconds
+        self.fast_update_seconds = fast_seconds
+        self.priority_ports = [p for p in (priority_ports or []) if p in ports]
+        # How many fast ticks make up one slow tick. 1 means feature is effectively off.
+        self._slow_every = (
+            max(1, round(update_seconds / fast_seconds))
+            if fast_seconds and fast_seconds < update_seconds
+            else 1
+        )
+        self._tick = 0
         self._last_total_bytes = 0
         # if_index → (rx_bytes, tx_bytes, monotonic_time) — used to compute live per-port rates centrally
         self._prev_port_counters: dict[int, tuple[int, int, float]] = {}
 
     async def _async_update_data(self) -> SwitchPortData:
+        do_full = (
+            self.data is None
+            or not self.priority_ports
+            or self._slow_every <= 1
+            or (self._tick % self._slow_every) == 0
+        )
+        self._tick += 1
+        if not do_full:
+            try:
+                return await self._fast_update()
+            except Exception as err:
+                _LOGGER.debug(
+                    "Fast priority-port update failed on %s, falling back to full poll: %s",
+                    self.host,
+                    err,
+                )
+        return await self._full_update()
+
+    async def _full_update(self) -> SwitchPortData:
         try:
             if not self.port_mapping:
                 # Fallback if detection somehow failed in __init__
@@ -781,6 +812,106 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
         except Exception as err:
             _LOGGER.exception("Update failed for %s", self.host)
             raise UpdateFailed(str(err)) from err
+
+    async def _fast_update(self) -> SwitchPortData:
+        """Targeted refresh of priority ports between full polls.
+
+        Issues GETs for rx/tx (HC counters), oper status, and PoE power for
+        each priority port and merges the result into the most recent full
+        snapshot. Everything else (system info, VLANs, entity sensors,
+        total bandwidth) is preserved from the previous tick.
+        """
+        prev = self.data
+        if prev is None:
+            return await self._full_update()
+
+        # Resolve priority port → if_index, skipping any not currently monitored.
+        priority_ifindex: dict[int, int] = {}
+        for port in self.priority_ports:
+            if port not in self.ports:
+                continue
+            port_info = self.port_mapping.get(port) or {}
+            priority_ifindex[port] = port_info.get("if_index", port)
+
+        if not priority_ifindex:
+            return prev
+
+        status_oid = self.base_oids.get("status") or ""
+        poe_oid = self.base_oids.get("poe_power") or ""
+
+        plans: list[tuple[int, int, str, str]] = []  # (port, if_index, kind, oid)
+        for port, if_index in priority_ifindex.items():
+            plans.append(
+                (port, if_index, "hc_rx", f"{CONF_OID_IFHCINOCTETS}.{if_index}")
+            )
+            plans.append(
+                (port, if_index, "hc_tx", f"{CONF_OID_IFHCOUTOCTETS}.{if_index}")
+            )
+            if status_oid:
+                plans.append((port, if_index, "status", f"{status_oid}.{if_index}"))
+            if poe_oid:
+                plans.append((port, if_index, "poe_power", f"{poe_oid}.{if_index}"))
+
+        results = await async_snmp_bulk(
+            self.hass,
+            self.host,
+            self.community,
+            self.snmp_port,
+            [p[3] for p in plans],
+            mp_model=self.mp_model,
+        )
+
+        new_ports = {p: dict(v) for p, v in prev.ports.items()}
+        for port, if_index, kind, oid in plans:
+            val = results.get(oid)
+            if val is None:
+                continue
+            pkey = str(port)
+            port_dict = new_ports.get(pkey)
+            if port_dict is None:
+                continue
+            try:
+                if kind == "hc_rx":
+                    port_dict["rx"] = int(val)
+                elif kind == "hc_tx":
+                    port_dict["tx"] = int(val)
+                elif kind == "status":
+                    port_dict["status"] = "on" if int(val) == 1 else "off"
+                elif kind == "poe_power":
+                    port_dict["poe_power"] = int(val)
+            except (ValueError, TypeError):
+                continue
+
+        # Recompute live per-port rates against the previous counter snapshot.
+        now = time.monotonic()
+        MAX_SAFE_BPS = 20_000_000_000
+        for port, if_index in priority_ifindex.items():
+            pkey = str(port)
+            port_dict = new_ports.get(pkey)
+            if port_dict is None:
+                continue
+            cur_rx = port_dict.get("rx", 0)
+            cur_tx = port_dict.get("tx", 0)
+            prev_counters = self._prev_port_counters.get(if_index)
+            if prev_counters is not None:
+                prev_rx, prev_tx, prev_ts = prev_counters
+                dt = now - prev_ts
+                if dt > 0:
+                    delta_rx = cur_rx - prev_rx
+                    delta_tx = cur_tx - prev_tx
+                    rx_bps_live = int(delta_rx * 8 / dt) if delta_rx >= 0 else 0
+                    tx_bps_live = int(delta_tx * 8 / dt) if delta_tx >= 0 else 0
+                    if 0 <= rx_bps_live <= MAX_SAFE_BPS:
+                        port_dict["rx_bps_live"] = rx_bps_live
+                    if 0 <= tx_bps_live <= MAX_SAFE_BPS:
+                        port_dict["tx_bps_live"] = tx_bps_live
+            self._prev_port_counters[if_index] = (cur_rx, cur_tx, now)
+
+        return SwitchPortData(
+            ports=new_ports,
+            bandwidth_mbps=prev.bandwidth_mbps,
+            system=prev.system,
+        )
 
 
 # =============================================================================

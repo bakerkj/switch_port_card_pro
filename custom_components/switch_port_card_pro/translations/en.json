@@ -28,7 +28,8 @@
   },
   "options": {
     "error": {
-      "invalid_oid": "Invalid OID format. Use dotted numeric notation (e.g. 1.3.6.1.2.1.1.1.0) or leave blank."
+      "invalid_oid": "Invalid OID format. Use dotted numeric notation (e.g. 1.3.6.1.2.1.1.1.0) or leave blank.",
+      "fast_interval_too_high": "Fast update interval must be less than the regular update interval. Set to 0 to disable."
     },
     "step": {
       "options": {
@@ -36,7 +37,9 @@
         "description": "Customize OIDs and port settings for your switch",
         "data": {
           "update_interval": "Update Interval (seconds)",
+          "fast_update_interval": "Fast Update Interval for Priority Ports (seconds, 0 = disabled)",
           "ports": "Ports to Monitor",
+          "priority_ports": "Priority Ports (polled at the fast interval; rx/tx/status/PoE only)",
           "re_detect_ports": "Re-run port detection on save (overwrites port list)",
           "include_vlans": "Enable VLAN monitoring (disable to skip VLAN walks)",
           "oid_rx": "Life-time RX Counter OID (for live RX calculation)",

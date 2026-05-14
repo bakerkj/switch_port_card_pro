@@ -21,6 +21,8 @@ from .const import (
     CONF_HOST,
     CONF_COMMUNITY,
     CONF_PORTS,
+    CONF_PRIORITY_PORTS,
+    CONF_FAST_UPDATE_INTERVAL,
     CONF_INCLUDE_VLANS,
     CONF_SNMP_PORT,
     SNMP_VERSION_TO_MP_MODEL,
@@ -118,6 +120,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     host = entry.data[CONF_HOST]
     community = entry.data[CONF_COMMUNITY]
     update_seconds = max(3, entry.options.get("update_interval", 20))
+    raw_fast_interval = entry.options.get(CONF_FAST_UPDATE_INTERVAL, 0) or 0
+    try:
+        fast_update_seconds = int(raw_fast_interval)
+    except (TypeError, ValueError):
+        fast_update_seconds = 0
+    if fast_update_seconds < 3:
+        fast_update_seconds = update_seconds
+    else:
+        fast_update_seconds = min(fast_update_seconds, update_seconds)
+    priority_ports_raw = entry.options.get(CONF_PRIORITY_PORTS, []) or []
+    priority_ports = []
+    for p in priority_ports_raw:
+        try:
+            priority_ports.append(int(p))
+        except (TypeError, ValueError):
+            continue
     include_vlans = entry.options.get(CONF_INCLUDE_VLANS, True)
     snmp_version = entry.options.get("snmp_version", "v2c")
     snmp_port = entry.options.get(CONF_SNMP_PORT, DEFAULT_SNMP_PORT)
@@ -349,12 +367,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         snmp_version,
         include_vlans,
         update_seconds,
+        fast_update_seconds=fast_update_seconds,
+        priority_ports=priority_ports,
     )
     coordinator.device_name = entry.title
     coordinator.port_mapping = detected or {}  # Empty dict if detection failed
     coordinator.manufacturer = manufacturer
     coordinator.config_entry = entry
-    coordinator.update_interval = timedelta(seconds=update_seconds)
+    coordinator.update_interval = timedelta(seconds=fast_update_seconds)
 
     # Store coordinator
     hass.data[DOMAIN][entry.entry_id] = coordinator
