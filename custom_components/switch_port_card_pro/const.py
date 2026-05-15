@@ -26,10 +26,12 @@ DEFAULT_AUTO_MANAGE_ENTITIES: Final = False
 DEFAULT_DOWN_GRACE_HOURS: Final = 24
 DEFAULT_UP_RESTORE_CYCLES: Final = 3
 
-# The per-port entity key that is always kept enabled (the on/off indicator;
-# it also carries the attribute payload the frontend card reads). Every other
-# per-port entity for a down port is a disable candidate.
+# Per-port entity keys the auto-manager must never disable: the on/off
+# indicator (`status`) and the telemetry carrier the frontend card reads
+# (`info`). Every other per-port entity for a down port is a disable
+# candidate. PORT_ANCHOR_KEY kept for backwards compatibility.
 PORT_ANCHOR_KEY: Final = "status"
+PORT_UNMANAGED_KEYS: Final = frozenset({"status", "info"})
 # Option keys (used in config flow)
 CONF_OID_RX: Final = "oid_rx"
 CONF_OID_TX: Final = "oid_tx"

@@ -28,6 +28,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -117,6 +118,33 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
         self._last_total_bytes = 0
         # if_index → (rx_bytes, tx_bytes, monotonic_time) — used to compute live per-port rates centrally
         self._prev_port_counters: dict[int, tuple[int, int, float]] = {}
+        # if_index → raw ifLastChange ticks last seen, and the absolute
+        # datetime it resolved to. The timestamp is only recomputed when the
+        # raw value changes (a real port transition), so it stays stable
+        # between transitions instead of jittering every poll.
+        self._last_change_ticks: dict[int, int] = {}
+        self._last_change_dt: dict[int, Any] = {}
+
+    def _resolve_last_change(
+        self,
+        if_index: int,
+        sys_uptime_ticks: int | None,
+        last_change_map: dict[int, Any],
+    ):
+        """Absolute datetime of the port's last state change (stable)."""
+        ticks = last_change_map.get(if_index)
+        if ticks is None or sys_uptime_ticks is None:
+            return self._last_change_dt.get(if_index)
+        if (
+            self._last_change_ticks.get(if_index) != ticks
+            or if_index not in self._last_change_dt
+        ):
+            seconds_ago = max(0.0, (sys_uptime_ticks - ticks) / 100.0)
+            self._last_change_dt[if_index] = dt_util.utcnow() - timedelta(
+                seconds=seconds_ago
+            )
+            self._last_change_ticks[if_index] = ticks
+        return self._last_change_dt[if_index]
 
     async def _async_update_data(self) -> SwitchPortData:
         do_full = (
@@ -458,7 +486,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     "out_errors": 0,
                     "in_discards": 0,
                     "out_discards": 0,
-                    "last_change_seconds": None,
+                    "last_change": None,
                 }
 
                 # For VLAN: dot1qPvid is indexed by bridge port, not ifIndex (RFC 4363).
@@ -507,13 +535,8 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                             "out_errors": out_errors.get(if_index, 0),
                             "in_discards": in_discards.get(if_index, 0),
                             "out_discards": out_discards.get(if_index, 0),
-                            "last_change_seconds": (
-                                round(
-                                    (sys_uptime_ticks - last_change.get(if_index)) / 100
-                                )
-                                if sys_uptime_ticks is not None
-                                and if_index in last_change
-                                else None
+                            "last_change": self._resolve_last_change(
+                                if_index, sys_uptime_ticks, last_change
                             ),
                         }
                     )
@@ -1212,11 +1235,12 @@ class SwitchPortPerPortBaseEntity(SensorEntity):
 
 
 class PortStatusSensor(SwitchPortPerPortBaseEntity):
-    """Port status (on/off) sensor — anchor entity for the per-port device.
+    """Port link state (on/off) — the recorded anchor of the per-port device.
 
-    Carries the full attribute payload (port_name, live rates, PoE, errors,
-    VLAN, etc.) so the existing frontend card continues to work. Newer
-    per-attribute sensors expose the same values as first-class entities.
+    Intentionally state-only: its value changes only on a real link
+    transition, so its recorder history is just genuine up/down events.
+    The volatile telemetry blob lives on the companion ``PortInfoSensor``
+    — that's what the frontend card reads.
     """
 
     def __init__(
@@ -1235,6 +1259,39 @@ class PortStatusSensor(SwitchPortPerPortBaseEntity):
     def icon(self) -> str | None:
         return "mdi:lan-connect" if self.native_value == "on" else "mdi:lan-disconnect"
 
+
+class PortInfoSensor(SwitchPortPerPortBaseEntity):
+    """Per-port telemetry carrier — the frontend card's data source.
+
+    Holds the full live attribute payload (rates, PoE, errors, VLAN, last
+    change, etc.) so the per-port ``Status`` entity can stay state-only.
+    Its attributes change every poll; its state is the (near-static) port
+    name. To keep this churn out of the database, exclude this entity in
+    your Home Assistant ``recorder:`` config, e.g.::
+
+        recorder:
+          exclude:
+            entity_globs:
+              - sensor.*_port_*_info
+
+    The data stays fully live for the card, templates and the websocket
+    regardless — the exclusion only affects history/logbook persistence.
+    """
+
+    def __init__(
+        self, coordinator: SwitchPortCoordinator, entry_id: str, port: int
+    ) -> None:
+        super().__init__(coordinator, entry_id, port)
+        self._attr_name = "Info"
+        self._attr_unique_id = f"{entry_id}_{coordinator.host}_port_{port}_info"
+        self._attr_icon = "mdi:information-outline"
+
+    @property
+    def native_value(self) -> str | None:
+        # Near-static (changes only if the port is renamed on the switch),
+        # so the state itself contributes ~no recorder rows either.
+        return self._port_data().get("name") or f"Port {self.port}"
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         p = self._port_data()
@@ -1249,6 +1306,7 @@ class PortStatusSensor(SwitchPortPerPortBaseEntity):
             or self.coordinator.base_oids.get("poe_power")
             or self.coordinator.base_oids.get("poe_status")
         )
+        last_change = p.get("last_change")
         attrs = {
             "port_name": p.get("name"),
             "speed_bps": p.get("speed"),
@@ -1266,7 +1324,9 @@ class PortStatusSensor(SwitchPortPerPortBaseEntity):
             "out_errors": p.get("out_errors", 0),
             "in_discards": p.get("in_discards", 0),
             "out_discards": p.get("out_discards", 0),
-            "last_change_seconds": p.get("last_change_seconds"),
+            "last_change": (
+                last_change.isoformat() if last_change is not None else None
+            ),
         }
         if self.coordinator.include_vlans:
             if p.get("vlan") is not None:
@@ -1410,9 +1470,8 @@ PORT_SENSOR_DESCRIPTIONS: tuple[PortSensorDescription, ...] = (
     PortSensorDescription(
         "last_change",
         "Last Change",
-        lambda _e, p: p.get("last_change_seconds"),
-        unit=UnitOfTime.SECONDS,
-        device_class=SensorDeviceClass.DURATION,
+        lambda _e, p: p.get("last_change"),
+        device_class=SensorDeviceClass.TIMESTAMP,
         icon="mdi:clock-outline",
         enabled_default=False,
     ),
@@ -1730,6 +1789,7 @@ async def async_setup_entry(
     include_vlans = bool(coordinator.include_vlans)
     for port in coordinator.ports:
         entities.append(PortStatusSensor(coordinator, entry.entry_id, port))
+        entities.append(PortInfoSensor(coordinator, entry.entry_id, port))
         for desc in PORT_SENSOR_DESCRIPTIONS:
             if desc.poe_only and not poe_available:
                 continue

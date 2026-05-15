@@ -264,6 +264,16 @@ def seed_registry(ports):
                     DISABLER.INTEGRATION,
                 )
             )
+        # Telemetry carrier — must never be touched by the manager.
+        _REG.entries.append(
+            _RegEntry(
+                f"sensor.p{p}_info",
+                f"{EID}_{HOST}_port_{p}_info",
+                DOMAIN,
+                EID,
+                None,
+            )
+        )
     # an unrelated system entity (must always be ignored)
     _REG.entries.append(
         _RegEntry("sensor.sys_cpu", f"{EID}_system_cpu", DOMAIN, EID, None)
@@ -364,6 +374,10 @@ async def main():
     check(
         "recorded set == exactly the 4 we disabled",
         recorded == {f"{EID}_{HOST}_port_1_{k}" for k in DEFAULT_ON},
+    )
+    check(
+        "info carrier never disabled (excluded like status)",
+        disabled_by(1, "info") is None and f"{EID}_{HOST}_port_1_info" not in recorded,
     )
 
     # ===== Scenario 4: still down, already managed → no re-raise =====

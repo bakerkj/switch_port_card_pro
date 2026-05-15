@@ -35,7 +35,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     DOMAIN,
-    PORT_ANCHOR_KEY,
+    PORT_UNMANAGED_KEYS,
     CONF_AUTO_MANAGE_ENTITIES,
     CONF_DOWN_GRACE_HOURS,
     CONF_UP_RESTORE_CYCLES,
@@ -133,7 +133,7 @@ class PortEntityManager:
             m = _UID_PORT_RE.search(ent.unique_id or "")
             if not m or m.group(1) != str(port):
                 continue
-            if m.group(2) == PORT_ANCHOR_KEY:
+            if m.group(2) in PORT_UNMANAGED_KEYS:
                 continue
             out.append(ent)
         return out

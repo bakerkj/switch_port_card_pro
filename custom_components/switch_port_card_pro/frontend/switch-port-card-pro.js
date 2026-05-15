@@ -152,6 +152,13 @@ class SwitchPortCardPro extends HTMLElement {
         const m = id.match(/_port_(\d+)_status/);
         if (m) entities[`port_${m[1]}_status`] = e;
       }
+      else if (id.includes("_port_") && id.includes("_info")) {
+        // Telemetry carrier (rates, PoE, VLAN, last change…). Split off the
+        // status entity so status history stays tiny; this one is
+        // recorder-excluded. Status entity supplies state/last_changed.
+        const m = id.match(/_port_(\d+)_info/);
+        if (m) entities[`port_${m[1]}_info`] = e;
+      }
     });
 
     return entities;
@@ -757,12 +764,15 @@ class SwitchPortCardPro extends HTMLElement {
     for (let i = 1; i <= total; i++) {
       const ent = e[`port_${i}_status`];
       if (!ent) continue;
+      // Attributes now live on the companion _info entity; fall back to the
+      // status entity for backward compat with older integration versions.
+      const info = e[`port_${i}_info`] || ent;
 
-      const rx = parseFloat(ent.attributes?.rx_bps_live || 0) || 0;
-      const tx = parseFloat(ent.attributes?.tx_bps_live || 0) || 0;
-      const vlan = ent.attributes?.vlan_id;
+      const rx = parseFloat(info.attributes?.rx_bps_live || 0) || 0;
+      const tx = parseFloat(info.attributes?.tx_bps_live || 0) || 0;
+      const vlan = info.attributes?.vlan_id;
 
-      allPorts.push({ i, traffic: rx + tx, vlan, ent });
+      allPorts.push({ i, traffic: rx + tx, vlan, ent, info });
     }
 
     const maxTraffic = Math.max(...allPorts.map(p => p.traffic), 1);
@@ -807,18 +817,19 @@ class SwitchPortCardPro extends HTMLElement {
     const sfpLayout = rearrange(sfpPorts);
 
     const renderPortRow = (portList, container) => {
-      portList.forEach(({ i, ent, isOn, traffic }) => {
-        const speedMbps = Math.round((ent.attributes?.speed_bps || 0) / 1e6) || 0;
-        const name = ent.attributes?.port_name?.trim() || `Port ${i}`;
-        const vlan = ent.attributes?.vlan_id;
-        const poeEnabled = ent.attributes?.poe_enabled === true;
-        const ifDescr = ent.attributes?.interface || "";
-        const port_custom = ent.attributes?.custom || "";
+      portList.forEach(({ i, ent, info, isOn, traffic }) => {
+        info = info || ent;
+        const speedMbps = Math.round((info.attributes?.speed_bps || 0) / 1e6) || 0;
+        const name = info.attributes?.port_name?.trim() || `Port ${i}`;
+        const vlan = info.attributes?.vlan_id;
+        const poeEnabled = info.attributes?.poe_enabled === true;
+        const ifDescr = info.attributes?.interface || "";
+        const port_custom = info.attributes?.custom || "";
 
-        const rxBps = parseFloat(ent.attributes?.rx_bps_live || 0) || 0;
-        const txBps = parseFloat(ent.attributes?.tx_bps_live || 0) || 0;
-        const rxBpsLifetime = parseInt(ent.attributes?.rx_bps || 0) || 0;
-        const txBpsLifetime = parseInt(ent.attributes?.tx_bps || 0) || 0;
+        const rxBps = parseFloat(info.attributes?.rx_bps_live || 0) || 0;
+        const txBps = parseFloat(info.attributes?.tx_bps_live || 0) || 0;
+        const rxBpsLifetime = parseInt(info.attributes?.rx_bps || 0) || 0;
+        const txBpsLifetime = parseInt(info.attributes?.tx_bps || 0) || 0;
         const lastChanged = new Date(ent.last_changed || ent.last_updated).getTime() / 1000;
         const idleSeconds = now - lastChanged;
 
