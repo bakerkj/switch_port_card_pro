@@ -1007,6 +1007,7 @@ class TotalPoESensor(SwitchPortBaseEntity):
     _attr_native_unit_of_measurement = "W"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
 
     def __init__(self, coordinator: SwitchPortCoordinator, entry_id: str) -> None:
         super().__init__(coordinator, entry_id)
@@ -1030,6 +1031,7 @@ class PoEBudgetTotalSensor(SwitchPortBaseEntity):
     _attr_native_unit_of_measurement = "W"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
     _attr_icon = "mdi:lightning-bolt"
 
     def __init__(self, coordinator: SwitchPortCoordinator, entry_id: str) -> None:
@@ -1299,6 +1301,7 @@ class PortSensorDescription:
     enabled_default: bool = True
     poe_only: bool = False
     vlan_only: bool = False
+    suggested_display_precision: int | None = None
 
 
 def _poe_power_watts(_e, p):
@@ -1443,6 +1446,7 @@ PORT_SENSOR_DESCRIPTIONS: tuple[PortSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:lightning-bolt",
         poe_only=True,
+        suggested_display_precision=1,
     ),
     PortSensorDescription(
         "poe_class",
@@ -1484,6 +1488,7 @@ class PortAttributeSensor(SwitchPortPerPortBaseEntity):
         self._attr_state_class = description.state_class
         self._attr_icon = description.icon
         self._attr_entity_registry_enabled_default = description.enabled_default
+        self._attr_suggested_display_precision = description.suggested_display_precision
 
     @property
     def native_value(self) -> Any:
