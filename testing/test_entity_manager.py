@@ -90,6 +90,12 @@ def _ir_delete(hass, domain, issue_id):
     _ISSUES.pop(issue_id, None)
 
 
+def _simulate_ha_restart():
+    """HA clears non-persistent issues on restart; persistent ones survive."""
+    for iid in [k for k, v in _ISSUES.items() if not v.get("is_persistent")]:
+        _ISSUES.pop(iid)
+
+
 _STORE_BACKING: dict[str, dict] = {}
 
 
@@ -205,8 +211,11 @@ class FakeCoordinator:
         self._listeners.append(cb)
         return lambda: self._listeners.remove(cb)
 
-    def set_status(self, port, on):
-        self.data.ports[str(port)] = {"status": "on" if on else "off"}
+    def set_status(self, port, on, last_change=None):
+        d = {"status": "on" if on else "off"}
+        if last_change is not None:
+            d["last_change_seconds"] = last_change
+        self.data.ports[str(port)] = d
 
 
 class FakeEntry:
@@ -514,6 +523,92 @@ async def main():
         "restore re-enabled the 3 we owned",
         all(disabled_by(6, k) is None for k in DEFAULT_ON if k != "tx_rate"),
     )
+
+    # ===== Scenario 10: ifLastChange accelerator =====
+    reset_world()
+    seed_registry([7, 8, 9])
+    coord7 = FakeCoordinator([7, 8, 9])
+    entry7 = FakeEntry(opts(grace_h=24))
+    hass7 = FakeHass()
+    mgr7 = new_manager(coord7, entry7, hass7)
+    await mgr7.async_load()
+    hass7.data[DOMAIN][EID] = coord7
+    coord7.entity_manager = mgr7
+    CLOCK.t += 1_000
+    # port 7: switch says down 30h (> 24h grace) -> flag on FIRST poll
+    coord7.set_status(7, False, last_change=30 * 3600)
+    # port 8: switch says down 10 min (< grace) -> must still wait
+    coord7.set_status(8, False, last_change=600)
+    # port 9: no ifLastChange data -> fall back to observed-time wait
+    coord7.set_status(9, False, last_change=None)
+    await mgr7._async_reconcile()
+    check(
+        "accelerator: long-down port flagged on first poll",
+        f"port_down_{EID}_7" in _ISSUES,
+    )
+    check(
+        "accelerator: recently-down port NOT flagged early",
+        f"port_down_{EID}_8" not in _ISSUES,
+    )
+    check(
+        "accelerator: no-data port NOT flagged early (fallback)",
+        f"port_down_{EID}_9" not in _ISSUES,
+    )
+    # port 8 only needs the remaining ~grace-600s; jump just past it
+    CLOCK.t += 24 * 3600
+    await mgr7._async_reconcile()
+    check(
+        "non-accelerated ports flag after real grace elapses",
+        f"port_down_{EID}_8" in _ISSUES and f"port_down_{EID}_9" in _ISSUES,
+    )
+
+    # ===== Scenario 11: issue persistence across restart + feature-off =====
+    reset_world()
+    seed_registry([10])
+    coordA = FakeCoordinator([10])
+    entryA = FakeEntry(opts(grace_h=1))
+    hassA = FakeHass()
+    mgrA = new_manager(coordA, entryA, hassA)
+    await mgrA.async_load()
+    hassA.data[DOMAIN][EID] = coordA
+    coordA.entity_manager = mgrA
+    coordA.set_status(10, False)
+    CLOCK.t += 100
+    await mgrA._async_reconcile()
+    CLOCK.t += 2 * 3600
+    await mgrA._async_reconcile()
+    iidA = f"port_down_{EID}_10"
+    check("scenario11: port flagged", iidA in _ISSUES)
+    check(
+        "issue created with is_persistent=True",
+        _ISSUES[iidA].get("is_persistent") is True,
+    )
+
+    # Simulate HA restart (drops only non-persistent issues) + fresh manager
+    # loading the persisted Store.
+    _simulate_ha_restart()
+    check("persistent issue survives HA restart", iidA in _ISSUES)
+    coordB = FakeCoordinator([10])
+    coordB.set_status(10, False)
+    entryB = FakeEntry(opts(grace_h=1))
+    hassB = FakeHass()
+    mgrB = new_manager(coordB, entryB, hassB)
+    await mgrB.async_load()
+    hassB.data[DOMAIN][EID] = coordB
+    coordB.entity_manager = mgrB
+    check("restart: issue_open restored from Store", mgrB._state["10"]["issue_open"])
+    CLOCK.t += 100
+    await mgrB._async_reconcile()
+    check(
+        "restart: issue still present (not lost), no duplicate churn",
+        iidA in _ISSUES,
+    )
+
+    # Feature turned off must clear the now-persistent issue.
+    entryB.options = opts(enabled=False, grace_h=1)
+    await mgrB._async_reconcile()
+    check("feature off clears persistent issue", iidA not in _ISSUES)
+    check("feature off resets issue_open", not mgrB._state["10"]["issue_open"])
 
     # ===== Summary =====
     total = len(RESULTS)

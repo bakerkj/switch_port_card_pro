@@ -178,7 +178,12 @@ class PortEntityManager:
             if self._stopped:
                 return
             enabled, grace_s, up_cycles = self._opts()
-            if not enabled or not self.coordinator.data:
+            if not enabled:
+                # Issues are persistent; if the feature is turned off they
+                # would otherwise linger forever. Clear ours.
+                await self._async_clear_all_issues()
+                return
+            if not self.coordinator.data:
                 return
             now = time.time()
             dirty = False
@@ -235,9 +240,24 @@ class PortEntityManager:
                         dirty = True
                     continue
                 if st["down_since"] is None:
-                    st["down_since"] = now
+                    # Seed the clock. If the switch reports how long the port
+                    # has held its current (down) state via ifLastChange,
+                    # back-date so a long-dead port is flagged on this poll
+                    # instead of waiting a fresh grace period from first
+                    # observation. ifLastChange resets on a switch reboot, so
+                    # this only ever accelerates — never flags early beyond
+                    # what the switch itself reports.
+                    lc = pdata.get("last_change_seconds")
+                    if isinstance(lc, (int, float)) and lc > 0:
+                        st["down_since"] = now - float(lc)
+                    else:
+                        st["down_since"] = now
                     dirty = True
-                elif now - st["down_since"] >= grace_s and not st["issue_open"]:
+                if (
+                    not st["issue_open"]
+                    and st["down_since"] is not None
+                    and now - st["down_since"] >= grace_s
+                ):
                     self._raise_issue(port)
                     st["issue_open"] = True
                     dirty = True
@@ -252,6 +272,7 @@ class PortEntityManager:
             DOMAIN,
             _issue_id(self.entry.entry_id, port),
             is_fixable=True,
+            is_persistent=True,  # survive HA restarts (matches persisted issue_open)
             severity=ir.IssueSeverity.WARNING,
             translation_key="port_down",
             translation_placeholders={
@@ -264,6 +285,19 @@ class PortEntityManager:
 
     async def _async_save(self) -> None:
         await self._store.async_save({"ports": self._state})
+
+    async def _async_clear_all_issues(self) -> None:
+        """Delete every Repair issue we raised (e.g. feature turned off)."""
+        dirty = False
+        for port, st in self._state.items():
+            if st.get("issue_open"):
+                ir.async_delete_issue(
+                    self.hass, DOMAIN, _issue_id(self.entry.entry_id, port)
+                )
+                st["issue_open"] = False
+                dirty = True
+        if dirty:
+            await self._async_save()
 
     # --- actions invoked by the Repairs fix flow ---------------------------
 
