@@ -1328,6 +1328,7 @@ PORT_SENSOR_DESCRIPTIONS: tuple[PortSensorDescription, ...] = (
         device_class=SensorDeviceClass.DATA_RATE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:speedometer",
+        suggested_display_precision=0,
     ),
     PortSensorDescription(
         "rx_rate",
