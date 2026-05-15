@@ -30,6 +30,12 @@ from .const import (
     DEFAULT_SNMP_PORT,
     CONF_OID_SYSNAME,
     CONF_INCLUDE_VLANS,
+    CONF_AUTO_MANAGE_ENTITIES,
+    CONF_DOWN_GRACE_HOURS,
+    CONF_UP_RESTORE_CYCLES,
+    DEFAULT_AUTO_MANAGE_ENTITIES,
+    DEFAULT_DOWN_GRACE_HOURS,
+    DEFAULT_UP_RESTORE_CYCLES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -307,6 +313,21 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                     CONF_INCLUDE_VLANS,
                     default=src.get(CONF_INCLUDE_VLANS, True),
                 ): cv.boolean,
+                # --- Auto-manage per-port entities (entity reduction) ---
+                vol.Optional(
+                    CONF_AUTO_MANAGE_ENTITIES,
+                    default=src.get(
+                        CONF_AUTO_MANAGE_ENTITIES, DEFAULT_AUTO_MANAGE_ENTITIES
+                    ),
+                ): cv.boolean,
+                vol.Optional(
+                    CONF_DOWN_GRACE_HOURS,
+                    default=src.get(CONF_DOWN_GRACE_HOURS, DEFAULT_DOWN_GRACE_HOURS),
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=8760)),
+                vol.Optional(
+                    CONF_UP_RESTORE_CYCLES,
+                    default=src.get(CONF_UP_RESTORE_CYCLES, DEFAULT_UP_RESTORE_CYCLES),
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
                 # --- Port OIDs ---
                 vol.Optional(
                     "oid_rx",

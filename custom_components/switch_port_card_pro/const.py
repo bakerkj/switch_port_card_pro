@@ -13,6 +13,23 @@ CONF_PRIORITY_PORTS: Final = "priority_ports"
 CONF_FAST_UPDATE_INTERVAL: Final = "fast_update_interval"
 CONF_INCLUDE_VLANS: Final = "include_vlans"
 CONF_SFP_PORTS_START = "sfp_ports_start"
+
+# --- Auto-manage per-port entities (Repairs-driven entity reduction) ---
+# Master opt-in switch. When off, the manager is inert.
+CONF_AUTO_MANAGE_ENTITIES: Final = "auto_manage_entities"
+# Hours a port must stay continuously down before a Repair issue is raised.
+CONF_DOWN_GRACE_HOURS: Final = "down_grace_hours"
+# Consecutive "on" polls before a port's previously-disabled extras are restored.
+CONF_UP_RESTORE_CYCLES: Final = "up_restore_cycles"
+
+DEFAULT_AUTO_MANAGE_ENTITIES: Final = False
+DEFAULT_DOWN_GRACE_HOURS: Final = 24
+DEFAULT_UP_RESTORE_CYCLES: Final = 3
+
+# The per-port entity key that is always kept enabled (the on/off indicator;
+# it also carries the attribute payload the frontend card reads). Every other
+# per-port entity for a down port is a disable candidate.
+PORT_ANCHOR_KEY: Final = "status"
 # Option keys (used in config flow)
 CONF_OID_RX: Final = "oid_rx"
 CONF_OID_TX: Final = "oid_tx"

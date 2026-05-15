@@ -11,6 +11,7 @@ from datetime import timedelta
 from homeassistant.helpers import config_validation as cv
 from .sensor import SwitchPortCoordinator
 
+from .entity_manager import PortEntityManager
 from .snmp_helper import (
     discover_physical_ports,
     async_prewarm_plugins,
@@ -384,6 +385,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Background first refresh
     await coordinator.async_config_entry_first_refresh()
+
+    # Auto-manage per-port entities (opt-in; Repairs-driven entity reduction)
+    manager = PortEntityManager(hass, entry, coordinator)
+    await manager.async_load()
+    coordinator.entity_manager = manager
+    manager.async_start()
+    entry.async_on_unload(manager.async_stop)
 
     entry.async_on_unload(entry.add_update_listener(async_options_updated))
     return True
