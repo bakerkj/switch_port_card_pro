@@ -42,6 +42,9 @@
           "priority_ports": "Priority Ports (polled at the fast interval; rx/tx/status/PoE only)",
           "re_detect_ports": "Re-run port detection on save (overwrites port list)",
           "include_vlans": "Enable VLAN monitoring (disable to skip VLAN walks)",
+          "auto_manage_entities": "Auto-manage per-port entities (suggest disabling sensors for long-down ports via Repairs; auto-restore when they come back)",
+          "down_grace_hours": "Down grace period (hours) before a port is flagged for cleanup",
+          "up_restore_cycles": "Consecutive 'up' polls before a restored port's sensors are re-enabled",
           "oid_rx": "Life-time RX Counter OID (for live RX calculation)",
           "oid_tx": "Life-time TX Counter OID (for live TX calculation)",
           "oid_status": "Port Status OID (determines on/off state)",
@@ -60,6 +63,27 @@
           "oid_uptime": "Uptime OID (seconds, converted to D:H:M)",
           "oid_custom": "Custom OID (displayed in system info box)",
           "snmp_version": "SNMP Protocol Version"
+        }
+      }
+    }
+  },
+  "issues": {
+    "port_down": {
+      "title": "Switch {host}: port {port} down for over {hours}h",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Port {port} on {host} has been down a while",
+            "description": "This port has had no link for over {hours} hours. Its per-port sensors (rates, PoE, errors, etc.) carry no useful data while it is down — only the Status indicator does. Choose how to clean up. Disabled sensors are automatically re-enabled if the port comes back up.",
+            "menu_options": {
+              "disable_this": "Disable this port's extra sensors",
+              "disable_all": "Disable extra sensors for ALL flagged ports",
+              "ignore": "Ignore this port (keep its sensors)"
+            }
+          }
+        },
+        "abort": {
+          "not_found": "This switch is no longer configured."
         }
       }
     }
