@@ -74,11 +74,12 @@
         "step": {
           "init": {
             "title": "Port {port} on {host} has been down a while",
-            "description": "This port has had no link for over {hours} hours. Its per-port sensors (rates, PoE, errors, etc.) carry no useful data while it is down — only the Status indicator does. Choose how to clean up. Disabled sensors are automatically re-enabled if the port comes back up.",
+            "description": "This port has had no link for over {hours} hours. Its per-port sensors (rates, PoE, errors, etc.) carry no useful data while it is down — only the Status indicator does. Choose how to clean up. Disabled sensors are automatically re-enabled if the port comes back up. Frequently flapping ports are auto-detected and skip this warning on their own; use 'Allow this port to flap' to mute one explicitly until it stays stable.",
             "menu_options": {
               "disable_this": "Disable this port's extra sensors",
               "disable_all": "Disable extra sensors for ALL flagged ports",
-              "ignore": "Ignore this port (keep its sensors)"
+              "ignore": "Ignore this port (keep its sensors)",
+              "allow_flap": "Allow this port to flap (mute until it stays stable)"
             }
           }
         },

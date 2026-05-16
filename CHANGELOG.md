@@ -1,6 +1,15 @@
 
 ## Changelog
 
+### [1.0.9] - Flapping ports no longer nag
+- Auto-manage Repairs: a port that flaps — a single down→up→down (or
+  up→down→up) bounce within half the down-grace window — is recognised as an
+  unstable link, not a stale dead port: the "port down" warning is no longer
+  raised, and an already-open one is retracted. Self-corrects once the link
+  stays quiet for that window.
+- New Repair fix-flow option "Allow this port to flap": mutes a port
+  explicitly until it is cleanly up for `up_restore_cycles` consecutive polls.
+
 ### [1.0.0] - Card improvement requests
 - Button on card for switching between color schemes live on the spot (POE still absent)
 - Port layout option added to show row of even/uneven to match HW look

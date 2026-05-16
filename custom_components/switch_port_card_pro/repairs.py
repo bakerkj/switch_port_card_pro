@@ -1,8 +1,9 @@
 """Repairs flow for Switch Port Card Pro.
 
 Raised when a port stays down past the grace period. The user can disable
-that port's extra entities, disable every flagged port at once, or ignore
-the port (keep its entities; re-arm only on the next up→down cycle).
+that port's extra entities, disable every flagged port at once, ignore the
+port (keep its entities; re-arm on the next up→down cycle), or allow it to
+flap (mute until the port is cleanly up for `up_restore_cycles` polls).
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ class PortDownRepairFlow(RepairsFlow):
     ) -> FlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["disable_this", "disable_all", "ignore"],
+            menu_options=["disable_this", "disable_all", "ignore", "allow_flap"],
         )
 
     async def async_step_disable_this(
@@ -61,6 +62,14 @@ class PortDownRepairFlow(RepairsFlow):
         mgr = self._manager()
         if mgr is not None:
             await mgr.async_ignore_port(self._data.get("port"))
+        return self.async_create_entry(title="", data={})
+
+    async def async_step_allow_flap(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        mgr = self._manager()
+        if mgr is not None:
+            await mgr.async_allow_flap(self._data.get("port"))
         return self.async_create_entry(title="", data={})
 
 
