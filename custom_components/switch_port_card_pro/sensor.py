@@ -487,6 +487,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     "in_discards": 0,
                     "out_discards": 0,
                     "last_change": None,
+                    "last_change_seconds": None,
                 }
 
                 # For VLAN: dot1qPvid is indexed by bridge port, not ifIndex (RFC 4363).
@@ -507,6 +508,21 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                         HighLowSpeed < 100000
                     ):  # check if we use the 32 or 64 bit variant
                         HighLowSpeed = HighLowSpeed * 1000000  # convert to bps
+                    lc_dt = self._resolve_last_change(
+                        if_index, sys_uptime_ticks, last_change
+                    )
+                    # Seconds the port has held its current state as of this
+                    # poll. `last_change` is a cached/stable datetime (it must
+                    # not jitter for the timestamp sensor), so the elapsed
+                    # seconds are derived here freshly. The Repairs
+                    # auto-manager reads `last_change_seconds` to back-date a
+                    # long-down port's grace clock; without this key emitted
+                    # that accelerator never fired in production.
+                    lc_seconds = (
+                        (dt_util.utcnow() - lc_dt).total_seconds()
+                        if lc_dt is not None
+                        else None
+                    )
                     ports_data[p].update(
                         {
                             "status": "on" if status.get(if_index, 2) == 1 else "off",
@@ -535,9 +551,8 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                             "out_errors": out_errors.get(if_index, 0),
                             "in_discards": in_discards.get(if_index, 0),
                             "out_discards": out_discards.get(if_index, 0),
-                            "last_change": self._resolve_last_change(
-                                if_index, sys_uptime_ticks, last_change
-                            ),
+                            "last_change": lc_dt,
+                            "last_change_seconds": lc_seconds,
                         }
                     )
 
