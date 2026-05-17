@@ -354,9 +354,10 @@ async def main():
     flow = rp.PortDownRepairFlow(hass, iid, {"entry_id": EID, "port": "1"})
     menu = await flow.async_step_init()
     check(
-        "fix flow shows 3-option menu",
+        "fix flow shows 4-option menu",
         menu["type"] == "menu"
-        and menu["menu_options"] == ["disable_this", "disable_all", "ignore"],
+        and menu["menu_options"]
+        == ["disable_this", "disable_all", "ignore", "allow_flap"],
     )
     res = await flow.async_step_disable_this()
     check("disable_this completes flow", res["type"] == "create_entry")
@@ -623,6 +624,175 @@ async def main():
     await mgrB._async_reconcile()
     check("feature off clears persistent issue", iidA not in _ISSUES)
     check("feature off resets issue_open", not mgrB._state["10"]["issue_open"])
+
+    # ===== Scenario 12: flapping auto-suppress + self-correction =====
+    reset_world()
+    seed_registry([11])
+    coord11 = FakeCoordinator([11])
+    entry11 = FakeEntry(opts(grace_h=24))  # grace/2 window = 12h
+    hass11 = FakeHass()
+    mgr11 = new_manager(coord11, entry11, hass11)
+    await mgr11.async_load()
+    hass11.data[DOMAIN][EID] = coord11
+    coord11.entity_manager = mgr11
+    iid11 = f"port_down_{EID}_11"
+
+    def flapping11() -> bool:
+        return em.PortEntityManager._is_flapping(mgr11._state["11"], CLOCK.t, 24 * 3600)
+
+    CLOCK.t += 1_000
+    coord11.set_status(11, False)
+    await mgr11._async_reconcile()  # seeds last_status, 0 transitions
+    check("first down (0 transitions): not flapping", not flapping11())
+    CLOCK.t += 3600
+    coord11.set_status(11, True)
+    await mgr11._async_reconcile()  # transition #1 (down→up)
+    check("1 transition (down→up): not flapping yet", not flapping11())
+    CLOCK.t += 3600
+    coord11.set_status(11, False)
+    await mgr11._async_reconcile()  # transition #2 (up→down)
+    check(
+        "2 transitions (down→up→down) inside grace/2: flapping",
+        flapping11(),
+    )
+    CLOCK.t += 3600
+    coord11.set_status(11, True)
+    await mgr11._async_reconcile()  # transition #3 (down→up)
+
+    # Switch now reports the port down 30h (> grace) — the accelerator would
+    # normally flag it immediately, but it is flapping, so suppress.
+    CLOCK.t += 3600
+    coord11.set_status(11, False, last_change=30 * 3600)
+    await mgr11._async_reconcile()
+    check(
+        "flapping + down>grace (accelerator): issue suppressed",
+        iid11 not in _ISSUES,
+    )
+
+    # Link goes quiet; once the flap window empties, long-down warns again.
+    CLOCK.t += 13 * 3600  # > grace/2 (12h) since the last transition
+    coord11.set_status(11, False)
+    await mgr11._async_reconcile()
+    check("flap window emptied: long-down warning resumes", iid11 in _ISSUES)
+
+    # ===== Scenario 13: manual 'allow_flap' (persistent until stable) =====
+    reset_world()
+    seed_registry([12])
+    coord12 = FakeCoordinator([12])
+    entry12 = FakeEntry(opts(grace_h=24))
+    hass12 = FakeHass()
+    mgr12 = new_manager(coord12, entry12, hass12)
+    await mgr12.async_load()
+    hass12.data[DOMAIN][EID] = coord12
+    coord12.entity_manager = mgr12
+    iid12 = f"port_down_{EID}_12"
+
+    coord12.set_status(12, False)
+    CLOCK.t += 1_000
+    await mgr12._async_reconcile()
+    CLOCK.t += 25 * 3600
+    await mgr12._async_reconcile()
+    check("port12 down>grace: issue raised", iid12 in _ISSUES)
+
+    flow12 = rp.PortDownRepairFlow(hass12, iid12, {"entry_id": EID, "port": "12"})
+    m12 = await flow12.async_step_init()
+    check("menu offers allow_flap", "allow_flap" in m12["menu_options"])
+    res12 = await flow12.async_step_allow_flap()
+    check("allow_flap completes flow", res12["type"] == "create_entry")
+    check("allow_flap: issue cleared", iid12 not in _ISSUES)
+    check(
+        "allow_flap: extras NOT disabled",
+        all(disabled_by(12, k) is None for k in DEFAULT_ON),
+    )
+    check("allow_flap: port marked flap_muted", mgr12._state["12"]["flap_muted"])
+
+    CLOCK.t += 100 * 3600
+    await mgr12._async_reconcile()
+    check("allow_flap: no re-raise while muted + down", iid12 not in _ISSUES)
+
+    # A single brief up must NOT clear the mute (this is the 'ignore' trap).
+    coord12.set_status(12, True)
+    await mgr12._async_reconcile()
+    check(
+        "allow_flap: single up keeps mute (unlike ignore)",
+        mgr12._state["12"]["flap_muted"],
+    )
+    coord12.set_status(12, False)
+    CLOCK.t += 26 * 3600
+    await mgr12._async_reconcile()
+    check("allow_flap: still muted after brief up→down", iid12 not in _ISSUES)
+
+    # Sustained up (up_restore_cycles consecutive polls) clears the mute.
+    coord12.set_status(12, True)
+    for _ in range(3):
+        await mgr12._async_reconcile()
+    check(
+        "allow_flap: mute cleared after sustained recovery",
+        not mgr12._state["12"]["flap_muted"],
+    )
+
+    # Re-armed: a fresh long-down stretch warns again.
+    coord12.set_status(12, False)
+    CLOCK.t += 1_000
+    await mgr12._async_reconcile()
+    CLOCK.t += 25 * 3600  # also ages out incidental flap transitions
+    await mgr12._async_reconcile()
+    check("allow_flap: re-arms after stable recovery", iid12 in _ISSUES)
+
+    # ===== Scenario 14: open issue retracted once suppressed; persistence ==
+    reset_world()
+    seed_registry([13])
+    coord13 = FakeCoordinator([13])
+    entry13 = FakeEntry(opts(grace_h=24))
+    hass13 = FakeHass()
+    mgr13 = new_manager(coord13, entry13, hass13)
+    await mgr13.async_load()
+    hass13.data[DOMAIN][EID] = coord13
+    coord13.entity_manager = mgr13
+    iid13 = f"port_down_{EID}_13"
+
+    coord13.set_status(13, False)
+    CLOCK.t += 1_000
+    await mgr13._async_reconcile()
+    CLOCK.t += 25 * 3600
+    await mgr13._async_reconcile()
+    check("port13 down>grace: issue raised", iid13 in _ISSUES)
+
+    # Port still down, but now flagged suppressed → reconcile retracts it.
+    mgr13._state["13"]["flap_muted"] = True
+    await mgr13._async_reconcile()
+    check(
+        "open issue retracted once port becomes suppressed",
+        iid13 not in _ISSUES and not mgr13._state["13"]["issue_open"],
+    )
+
+    saved13 = new_manager(coord13, FakeEntry(opts(grace_h=24)), hass13)
+    await saved13.async_load()
+    check(
+        "flap_muted round-trips via Store",
+        saved13._state.get("13", {}).get("flap_muted") is True,
+    )
+
+    # A legacy store entry (pre-flap keys) must load with safe defaults.
+    _STORE_BACKING[f"{DOMAIN}.{EID}.entity_manager"] = {
+        "ports": {
+            "13": {
+                "down_since": None,
+                "ignored": False,
+                "disabled_uids": [],
+                "issue_open": False,
+            }
+        }
+    }
+    legacy13 = new_manager(coord13, FakeEntry(opts(grace_h=24)), hass13)
+    await legacy13.async_load()
+    ls = legacy13._state["13"]
+    check(
+        "legacy store gains new flap keys via default-merge",
+        not ls.get("flap_muted")
+        and ls.get("transitions") == []
+        and ls.get("last_status") is None,
+    )
 
     # ===== Summary =====
     total = len(RESULTS)

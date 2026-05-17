@@ -11,6 +11,14 @@ Policy (hybrid):
   * Suggest disable (never automatic): a port down continuously past
     `down_grace_hours` raises a fixable Repair issue. The user chooses to
     disable that port, disable all flagged ports, or ignore the port.
+  * Flapping ports are not "long down" ports — they are unstable links, and
+    nagging about them (or disabling their entities) is the wrong action. A
+    port with `FLAP_MIN_TRANSITIONS`+ up<->down transitions inside the trailing
+    `down_grace_hours / 2` is treated as flapping: the Repair is not raised
+    (and an already-open one is cleared). This self-corrects once the link
+    goes quiet for that half-grace window. The user can also explicitly mute
+    a port via the Repair flow ("allow flapping"); that mute persists until
+    the port is cleanly up for `up_restore_cycles` consecutive polls.
 
 Note: entities with `entity_registry_enabled_default=False` are registered by
 HA with `disabled_by=INTEGRATION` — the same marker we would use. So we cannot
@@ -49,6 +57,15 @@ _LOGGER = logging.getLogger(__name__)
 _STORE_VERSION = 1
 _UID_PORT_RE = re.compile(r"_port_(\d+)_(.+)$")
 
+# A port counts as "flapping" once it records this many up<->down transitions
+# inside the trailing `down_grace_hours / 2`. 2 means a single bounce —
+# `down->up->down` or `up->down->up` — within the half-grace window is enough
+# to treat the link as unstable rather than a stale dead port. A genuinely
+# dead/unused port only ever goes `up->down` once (1 transition) and stays
+# down, so it is never misclassified. The window is derived from the existing
+# grace option rather than adding another knob.
+FLAP_MIN_TRANSITIONS = 2
+
 
 def _issue_id(entry_id: str, port: int | str) -> str:
     return f"port_down_{entry_id}_{port}"
@@ -60,6 +77,9 @@ def _default_port_state() -> dict[str, Any]:
         "ignored": False,  # user chose "ignore" — suppress until next up→down
         "disabled_uids": [],  # unique_ids WE disabled (precise restore set)
         "issue_open": False,  # a Repair issue is currently raised
+        "transitions": [],  # epoch secs of recent up<->down changes (pruned)
+        "last_status": None,  # last observed "on"/"off" (transition detection)
+        "flap_muted": False,  # user chose "allow flapping" — mute until stable
     }
 
 
@@ -165,6 +185,44 @@ class PortEntityManager:
             n += 1
         return n
 
+    # --- flap detection ----------------------------------------------------
+
+    @staticmethod
+    def _note_transition(
+        st: dict[str, Any], status_on: bool | None, now: float, grace_s: float
+    ) -> bool:
+        """Record an up<->down change and prune to the half-grace window.
+
+        Returns True if `st` was mutated (so the caller can mark dirty).
+        `status_on` is None when the port has no usable data this poll — we
+        neither record a transition nor lose the prior state.
+        """
+        if status_on is None:
+            return False
+        cur = "on" if status_on else "off"
+        prev = st.get("last_status")
+        window = grace_s / 2.0
+        trans: list[float] = list(st.get("transitions") or [])
+        changed = False
+        if prev is not None and cur != prev:
+            trans.append(now)
+            changed = True
+        kept = [t for t in trans if now - t <= window]
+        if kept != (st.get("transitions") or []):
+            st["transitions"] = kept
+            changed = True
+        if prev != cur:
+            st["last_status"] = cur
+            changed = True
+        return changed
+
+    @staticmethod
+    def _is_flapping(st: dict[str, Any], now: float, grace_s: float) -> bool:
+        """True if the port changed state often enough inside grace/2."""
+        window = grace_s / 2.0
+        recent = [t for t in (st.get("transitions") or []) if now - t <= window]
+        return len(recent) >= FLAP_MIN_TRANSITIONS
+
     # --- reconcile ---------------------------------------------------------
 
     @callback
@@ -190,9 +248,19 @@ class PortEntityManager:
             for port_int in self.coordinator.ports:
                 port = str(port_int)
                 pdata = self.coordinator.data.ports.get(port) or {}
-                status_on = pdata.get("status") == "on"
+                raw_status = pdata.get("status")
+                status_on = raw_status == "on"
+                status_known = raw_status in ("on", "off")
                 st = self._state.setdefault(port, _default_port_state())
                 recorded = list(st.get("disabled_uids") or [])
+
+                # Track up<->down transitions for flap detection. Done first so
+                # every branch (incl. the early continues below) keeps the
+                # window current. Unknown status records nothing.
+                if self._note_transition(
+                    st, status_on if status_known else None, now, grace_s
+                ):
+                    dirty = True
 
                 if status_on:
                     if st["down_since"] is not None:
@@ -207,21 +275,29 @@ class PortEntityManager:
                         )
                         st["issue_open"] = False
                         dirty = True
-                    if recorded:
-                        self._on_streak[port] = self._on_streak.get(port, 0) + 1
-                        if self._on_streak[port] >= up_cycles:
+                    self._on_streak[port] = self._on_streak.get(port, 0) + 1
+                    if self._on_streak[port] >= up_cycles:
+                        if recorded:
                             n = self._reenable(port, recorded)
-                            self._on_streak[port] = 0
                             st["disabled_uids"] = []
                             dirty = True
                             if n:
                                 _LOGGER.info(
-                                    "Port %s on %s back up — re-enabled " "%d entities",
+                                    "Port %s on %s back up — re-enabled %d entities",
                                     port,
                                     self.coordinator.host,
                                     n,
                                 )
-                    else:
+                        if st.get("flap_muted"):
+                            st["flap_muted"] = False
+                            dirty = True
+                            _LOGGER.info(
+                                "Port %s on %s stable for %d cycles — "
+                                "flap mute cleared",
+                                port,
+                                self.coordinator.host,
+                                up_cycles,
+                            )
                         self._on_streak[port] = 0
                     continue
 
@@ -253,10 +329,23 @@ class PortEntityManager:
                     else:
                         st["down_since"] = now
                     dirty = True
-                if (
-                    not st["issue_open"]
-                    and st["down_since"] is not None
+                # Flapping / user-muted ports are unstable links, not stale
+                # dead ports: never nag, and retract a warning raised before
+                # the flapping became apparent.
+                suppressed = bool(st.get("flap_muted")) or self._is_flapping(
+                    st, now, grace_s
+                )
+                if st["issue_open"]:
+                    if suppressed:
+                        ir.async_delete_issue(
+                            self.hass, DOMAIN, _issue_id(self.entry.entry_id, port)
+                        )
+                        st["issue_open"] = False
+                        dirty = True
+                elif (
+                    st["down_since"] is not None
                     and now - st["down_since"] >= grace_s
+                    and not suppressed
                 ):
                     self._raise_issue(port)
                     st["issue_open"] = True
@@ -342,6 +431,29 @@ class PortEntityManager:
             )
             st["issue_open"] = False
         await self._async_save()
+
+    async def async_allow_flap(self, port: str | int) -> None:
+        """Mute `port`: keep its entities, never warn while it flaps.
+
+        Unlike ``ignore`` (which re-arms on the next up→down), this stays
+        muted until the port is cleanly up for ``up_restore_cycles``
+        consecutive polls — i.e. the link genuinely stabilised.
+        """
+        port = str(port)
+        st = self._state.setdefault(port, _default_port_state())
+        st["flap_muted"] = True
+        st["down_since"] = None
+        if st["issue_open"]:
+            ir.async_delete_issue(
+                self.hass, DOMAIN, _issue_id(self.entry.entry_id, port)
+            )
+            st["issue_open"] = False
+        await self._async_save()
+        _LOGGER.info(
+            "Port %s on %s muted as flapping (user-approved)",
+            port,
+            self.coordinator.host,
+        )
 
     def flagged_ports(self) -> list[int]:
         return sorted(int(p) for p, st in self._state.items() if st.get("issue_open"))
