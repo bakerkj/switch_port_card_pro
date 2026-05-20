@@ -45,6 +45,7 @@
           "auto_manage_entities": "Auto-manage per-port entities (suggest disabling sensors for long-down ports via Repairs; auto-restore when they come back)",
           "down_grace_hours": "Down grace period (hours) before a port is flagged for cleanup",
           "up_restore_cycles": "Consecutive 'up' polls before a restored port's sensors are re-enabled",
+          "record_decimation": "Recorder decimation (publish rx/tx/PoE every Nth poll; 1 = every poll, 2 ≈ halves recorder rows)",
           "oid_rx": "Life-time RX Counter OID (for live RX calculation)",
           "oid_tx": "Life-time TX Counter OID (for live TX calculation)",
           "oid_status": "Port Status OID (determines on/off state)",

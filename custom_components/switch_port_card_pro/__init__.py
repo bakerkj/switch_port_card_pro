@@ -26,10 +26,12 @@ from .const import (
     CONF_FAST_UPDATE_INTERVAL,
     CONF_INCLUDE_VLANS,
     CONF_SNMP_PORT,
+    CONF_RECORD_DECIMATION,
     SNMP_VERSION_TO_MP_MODEL,
     DEFAULT_BASE_OIDS,
     DEFAULT_SYSTEM_OIDS,
     DEFAULT_SNMP_PORT,
+    DEFAULT_RECORD_DECIMATION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -141,6 +143,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     snmp_version = entry.options.get("snmp_version", "v2c")
     snmp_port = entry.options.get(CONF_SNMP_PORT, DEFAULT_SNMP_PORT)
     mp_model = SNMP_VERSION_TO_MP_MODEL.get(snmp_version, 1)
+    try:
+        record_decimation = int(
+            entry.options.get(CONF_RECORD_DECIMATION, DEFAULT_RECORD_DECIMATION)
+        )
+    except (TypeError, ValueError):
+        record_decimation = DEFAULT_RECORD_DECIMATION
+    record_decimation = max(1, min(20, record_decimation))
 
     # Pre-warm puresnmp plugin loaders once per process to keep SNMP calls
     # off of HA's blocking-call detector.
@@ -370,6 +379,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_seconds,
         fast_update_seconds=fast_update_seconds,
         priority_ports=priority_ports,
+        record_decimation=record_decimation,
     )
     coordinator.device_name = entry.title
     coordinator.port_mapping = detected or {}  # Empty dict if detection failed

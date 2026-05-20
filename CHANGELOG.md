@@ -1,6 +1,24 @@
 
 ## Changelog
 
+### [1.0.12] - Recorder decimation for rx/tx/PoE
+- New "Recorder decimation" option (default 2). SNMP still polls every
+  full update, but the high-rate per-port sensors only publish a fresh
+  value every Nth poll. Different ports are phase-staggered by a CRC32 of
+  their key, so emissions spread across the window instead of bursting
+  on one cycle. Roughly halves recorder rows at N=2 with no information
+  loss for rates (the published bps is the exact average over the
+  N-poll window) and "last-seen" behavior for PoE power.
+- Decimated sensors: per-port `rx_rate`, `tx_rate`, `poe_power`, and the
+  aggregate Total Bandwidth + Total PoE Power. Errors, discards, status,
+  link speed, VLAN, system CPU/memory, temperature, fans, and the
+  ifLastChange / boot-time timestamps are unaffected — they only emit
+  when their underlying value changes anyway.
+- Priority ports bypass decimation so the explicit fast-update channel
+  still publishes every fast tick.
+- Set to 1 to disable; higher values trade time resolution for more
+  recorder savings (e.g. N=4 quarters the row rate).
+
 ### [1.0.11] - Online Since timestamp + uptime disabled by default
 - New "Online Since" sensor: a stable boot-time timestamp derived from
   sysUpTime that only moves on a real reboot (poll/clock jitter inside a 5s

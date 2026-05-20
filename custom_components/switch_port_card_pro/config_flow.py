@@ -36,6 +36,8 @@ from .const import (
     DEFAULT_AUTO_MANAGE_ENTITIES,
     DEFAULT_DOWN_GRACE_HOURS,
     DEFAULT_UP_RESTORE_CYCLES,
+    CONF_RECORD_DECIMATION,
+    DEFAULT_RECORD_DECIMATION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -328,6 +330,10 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                     CONF_UP_RESTORE_CYCLES,
                     default=src.get(CONF_UP_RESTORE_CYCLES, DEFAULT_UP_RESTORE_CYCLES),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+                vol.Optional(
+                    CONF_RECORD_DECIMATION,
+                    default=src.get(CONF_RECORD_DECIMATION, DEFAULT_RECORD_DECIMATION),
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=20)),
                 # --- Port OIDs ---
                 vol.Optional(
                     "oid_rx",

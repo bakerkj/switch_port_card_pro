@@ -26,6 +26,17 @@ DEFAULT_AUTO_MANAGE_ENTITIES: Final = False
 DEFAULT_DOWN_GRACE_HOURS: Final = 24
 DEFAULT_UP_RESTORE_CYCLES: Final = 3
 
+# Recorder decimation: publish high-rate per-port sensors only every Nth
+# full poll, phase-staggered across ports so emissions spread evenly. SNMP
+# still polls every cycle (no change in network/switch load) and rate
+# values are computed over the full N-poll window so no information is
+# lost — just fewer recorder rows. Priority ports bypass decimation so
+# they keep their explicit faster cadence. 1 disables the feature; 2
+# roughly halves recorder rows for rx_rate/tx_rate/poe_power; higher
+# values trade time resolution for more recorder savings.
+CONF_RECORD_DECIMATION: Final = "record_decimation"
+DEFAULT_RECORD_DECIMATION: Final = 2
+
 # Per-port entity keys the auto-manager must never disable: the on/off
 # indicator (`status`) and the telemetry carrier the frontend card reads
 # (`info`). Every other per-port entity for a down port is a disable

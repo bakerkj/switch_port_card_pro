@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import time
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -93,6 +94,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
         update_seconds: int,
         fast_update_seconds: int | None = None,
         priority_ports: list[int] | None = None,
+        record_decimation: int = 1,
     ) -> None:
         fast_seconds = fast_update_seconds or update_seconds
         super().__init__(
@@ -120,7 +122,6 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             else 1
         )
         self._tick = 0
-        self._last_total_bytes = 0
         # if_index → (rx_bytes, tx_bytes, monotonic_time) — used to compute live per-port rates centrally
         self._prev_port_counters: dict[int, tuple[int, int, float]] = {}
         # if_index → raw ifLastChange ticks last seen, and the absolute
@@ -134,6 +135,34 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
         # the timestamp would change every poll and spam the recorder.
         self._boot_dt: Any | None = None
         self._last_uptime_ticks: int | None = None
+        # Recorder decimation. SNMP still polls every full update; rx/tx
+        # rates and PoE power only refresh their published value once per
+        # `record_decimation` full polls. Different ports are phase-staggered
+        # by a CRC32 of their key so emissions spread across the window
+        # instead of all firing on cycle 0. Priority ports bypass this and
+        # always emit (they're the user's explicit "I want this fast" path).
+        self._record_decimation = max(1, int(record_decimation))
+        self._poll_cycle: int = -1
+        # if_index → last published (rx_bps, tx_bps), held between emit cycles.
+        self._port_rate_out: dict[int, tuple[int, int]] = {}
+        # if_index → last published PoE power in mW (held between emit cycles).
+        self._port_poe_out: dict[int, int] = {}
+        # Aggregate bandwidth (Mbps): reference (bytes, monotonic_time) advances
+        # only on emit; held value re-published between emits.
+        self._bandwidth_ref: tuple[int, float] | None = None
+        self._held_bandwidth_mbps: float = 0.0
+
+    def _emit_now(self, key: str) -> bool:
+        """Whether ``key``'s decimated value should refresh on this poll.
+
+        Phase-staggered by a stable hash of the key so distinct keys land
+        on different cycles, spreading recorder writes evenly across the
+        decimation window instead of bursting them all together.
+        """
+        span = self._record_decimation
+        if span <= 1:
+            return True
+        return self._poll_cycle % span == zlib.crc32(key.encode()) % span
 
     def _resolve_boot_time(self, sys_uptime_ticks: int | None):
         """Stable datetime the switch came online.
@@ -198,6 +227,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
 
     async def _full_update(self) -> SwitchPortData:
         try:
+            self._poll_cycle += 1
             if not self.port_mapping:
                 # Fallback if detection somehow failed in __init__
                 self.port_mapping = {
@@ -491,6 +521,8 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
             total_rx = total_tx = total_poe_mw = 0
             now = time.monotonic()
             new_port_counters: dict[int, tuple[int, int, float]] = {}
+            new_rate_out: dict[int, tuple[int, int]] = {}
+            new_poe_out: dict[int, int] = {}
 
             for port in self.ports:
                 p = str(port)
@@ -589,11 +621,22 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
 
                 # Live per-port rate (centralized — replaces per-sensor delta tracking).
                 # Uses HC counters when present, otherwise falls back to 32-bit and handles wrap.
+                # With recorder decimation, the byte-counter reference advances
+                # only on emit cycles, so the published bps is the exact average
+                # over the full decimation window. Priority ports bypass
+                # decimation — they are the user's explicit fast-path.
                 cur_rx = ports_data[p]["rx"]
                 cur_tx = ports_data[p]["tx"]
                 using_hc = if_index in hc_rx or if_index in hc_tx
+                is_priority = port in self.priority_ports
+                rate_emits = is_priority or self._emit_now(f"rate:{port}")
+                held_rx_bps, held_tx_bps = self._port_rate_out.get(if_index, (0, 0))
                 prev = self._prev_port_counters.get(if_index)
-                if prev is not None:
+                if prev is None:
+                    # First sighting: seed reference, no rate yet.
+                    new_port_counters[if_index] = (cur_rx, cur_tx, now)
+                    rx_bps_live, tx_bps_live = held_rx_bps, held_tx_bps
+                elif rate_emits:
                     prev_rx, prev_tx, prev_ts = prev
                     dt = now - prev_ts
                     if dt > 0:
@@ -609,48 +652,79 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                         tx_bps_live = int(delta_tx * 8 / dt) if delta_tx >= 0 else 0
                         MAX_SAFE_BPS = 20_000_000_000
                         if rx_bps_live < 0 or rx_bps_live > MAX_SAFE_BPS:
-                            rx_bps_live = 0
+                            rx_bps_live = held_rx_bps
                         if tx_bps_live < 0 or tx_bps_live > MAX_SAFE_BPS:
-                            tx_bps_live = 0
-                        ports_data[p]["rx_bps_live"] = rx_bps_live
-                        ports_data[p]["tx_bps_live"] = tx_bps_live
-                new_port_counters[if_index] = (cur_rx, cur_tx, now)
+                            tx_bps_live = held_tx_bps
+                    else:
+                        rx_bps_live, tx_bps_live = held_rx_bps, held_tx_bps
+                    new_port_counters[if_index] = (cur_rx, cur_tx, now)
+                else:
+                    # Non-emit cycle: keep reference unadvanced and hold the
+                    # last published rate so the recorder dedupes it.
+                    new_port_counters[if_index] = prev
+                    rx_bps_live, tx_bps_live = held_rx_bps, held_tx_bps
+                new_rate_out[if_index] = (rx_bps_live, tx_bps_live)
+                ports_data[p]["rx_bps_live"] = rx_bps_live
+                ports_data[p]["tx_bps_live"] = tx_bps_live
+
+                # PoE power: decimated with "last-seen" semantics — refresh
+                # the published value on emit cycles, hold it otherwise.
+                cur_poe = poe_power.get(if_index, 0)
+                prev_poe = self._port_poe_out.get(if_index)
+                poe_emits = is_priority or self._emit_now(f"poe:{port}")
+                if prev_poe is None or poe_emits:
+                    out_poe = cur_poe
+                else:
+                    out_poe = prev_poe
+                new_poe_out[if_index] = out_poe
+                ports_data[p]["poe_power"] = out_poe
 
                 total_rx += cur_rx
                 total_tx += cur_tx
-                total_poe_mw += poe_power.get(if_index, 0)
+                # Aggregate from held values so the Total PoE sensor matches
+                # what individual port sensors are currently publishing.
+                total_poe_mw += out_poe
 
             # Replace counters dict so removed ports stop accumulating stale state.
             self._prev_port_counters = new_port_counters
+            self._port_rate_out = new_rate_out
+            self._port_poe_out = new_poe_out
 
-            # compute current totals (these are lifetime counters) in bytes
+            # Total bandwidth (Mbps): decimated identically to per-port rates.
+            # The reference advances only on emit cycles so the published
+            # value is the average over the full decimation window. Between
+            # emits the held value is re-published and the recorder dedupes.
             current_total_bytes = total_rx + total_tx
-            # compute delta from last poll
-            delta_total = current_total_bytes - getattr(self, "_last_total_bytes", 0)
-            # Handle counter wrap or reset
-            if delta_total < 0:
-                using_hc = bool(hc_rx or hc_tx)
-                if using_hc:
-                    # 64-bit: treat negative as reset
-                    delta_total = 0
-                else:
-                    # 32-bit wrap at 2^32 bytes (~4GB)
-                    MAX32 = 4_294_967_296
-                    if getattr(self, "_last_total_bytes", 0) > 3_000_000_000:
-                        delta_total = (
-                            MAX32 - self._last_total_bytes
-                        ) + current_total_bytes
-                    else:
+            bandwidth_emits = self._emit_now("total_bandwidth")
+            if self._bandwidth_ref is None:
+                # First sighting: seed.
+                self._bandwidth_ref = (current_total_bytes, now)
+                bandwidth_mbps = self._held_bandwidth_mbps
+            elif bandwidth_emits:
+                prev_bytes, prev_ts = self._bandwidth_ref
+                delta_total = current_total_bytes - prev_bytes
+                if delta_total < 0:
+                    using_hc = bool(hc_rx or hc_tx)
+                    if using_hc:
+                        # 64-bit: treat negative as reset.
                         delta_total = 0
-            # prefer using configured stable interval if available
-            delta_time = getattr(self, "update_seconds", 20)
-            if delta_time <= 0:
-                delta_time = 20
-            # Mbps: megabits per second
-            bandwidth_mbps = round((delta_total * 8) / (1024 * 1024) / delta_time, 2)
-
-            # store for next run
-            self._last_total_bytes = current_total_bytes
+                    else:
+                        # 32-bit wrap at 2^32 bytes (~4GB).
+                        MAX32 = 4_294_967_296
+                        if prev_bytes > 3_000_000_000:
+                            delta_total = (MAX32 - prev_bytes) + current_total_bytes
+                        else:
+                            delta_total = 0
+                dt = now - prev_ts
+                if dt > 0:
+                    bandwidth_mbps = round((delta_total * 8) / (1024 * 1024) / dt, 2)
+                else:
+                    bandwidth_mbps = self._held_bandwidth_mbps
+                self._bandwidth_ref = (current_total_bytes, now)
+                self._held_bandwidth_mbps = bandwidth_mbps
+            else:
+                # Non-emit cycle: hold the previously published value.
+                bandwidth_mbps = self._held_bandwidth_mbps
             # === SYSTEM OIDs ===
             raw_system = await async_snmp_bulk(
                 self.hass,
