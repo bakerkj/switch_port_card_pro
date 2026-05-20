@@ -1,6 +1,15 @@
 
 ## Changelog
 
+### [1.0.11] - Online Since timestamp + uptime disabled by default
+- New "Online Since" sensor: a stable boot-time timestamp derived from
+  sysUpTime that only moves on a real reboot (poll/clock jitter inside a 5s
+  window is absorbed), so it doesn't churn the recorder.
+- Uptime sensor is now disabled by default — its value advances every poll
+  and was a steady source of needless recorder inserts. Existing
+  installations keep their current enable/disable state; new installs get
+  "Online Since" instead.
+
 ### [1.0.10] - ifLastChange accelerator actually works
 - The Repairs auto-manager's ifLastChange accelerator (back-date a long-down
   port's grace clock so it is flagged on the first poll instead of waiting a

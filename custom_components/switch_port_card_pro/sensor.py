@@ -65,6 +65,11 @@ from .snmp_helper import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Tolerance for boot-time drift before we treat sysUpTime as a real reboot
+# (vs. poll/network/clock jitter). Anything inside this window keeps the
+# previously cached boot datetime so the sensor doesn't churn every poll.
+BOOT_TIME_JITTER_S = 5.0
+
 
 @dataclass
 class SwitchPortData:
@@ -124,6 +129,32 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
         # between transitions instead of jittering every poll.
         self._last_change_ticks: dict[int, int] = {}
         self._last_change_dt: dict[int, Any] = {}
+        # Switch boot time, derived from sysUpTime. Recomputed only when the
+        # candidate drifts > BOOT_TIME_JITTER_S (poll/clock noise) — otherwise
+        # the timestamp would change every poll and spam the recorder.
+        self._boot_dt: Any | None = None
+        self._last_uptime_ticks: int | None = None
+
+    def _resolve_boot_time(self, sys_uptime_ticks: int | None):
+        """Stable datetime the switch came online.
+
+        Recomputed only when sysUpTime resets (reboot) or the candidate
+        boot moment drifts past BOOT_TIME_JITTER_S — otherwise small poll
+        timing variations would push a new state every tick.
+        """
+        if sys_uptime_ticks is None:
+            return self._boot_dt
+        candidate = dt_util.utcnow() - timedelta(seconds=sys_uptime_ticks / 100.0)
+        prev_ticks = self._last_uptime_ticks
+        rebooted = prev_ticks is not None and sys_uptime_ticks < prev_ticks
+        self._last_uptime_ticks = sys_uptime_ticks
+        if self._boot_dt is None or rebooted:
+            self._boot_dt = candidate
+            return self._boot_dt
+        drift = abs((candidate - self._boot_dt).total_seconds())
+        if drift > BOOT_TIME_JITTER_S:
+            self._boot_dt = candidate
+        return self._boot_dt
 
     def _resolve_last_change(
         self,
@@ -661,6 +692,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     round(total_poe_mw / 1000.0, 2) if total_poe_mw > 0 else None
                 ),
                 "custom": get("custom"),
+                "boot_time": self._resolve_boot_time(sys_uptime_ticks),
             }
 
             # HP/Aruba auto-detection: fill in cpu/memory/firmware if not manually configured.
@@ -1655,13 +1687,19 @@ class SystemMemorySensor(SwitchPortBaseEntity):
 
 
 class SystemUptimeSensor(SwitchPortBaseEntity):
-    """System Uptime sensor."""
+    """System Uptime sensor.
+
+    Disabled by default: its value advances every poll, which spams the
+    recorder. Use ``SystemStartTimeSensor`` ("Online Since") for a stable
+    timestamp that only changes on a real reboot.
+    """
 
     _attr_name = "Uptime"
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_unique_id_suffix = "system_uptime"
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: SwitchPortCoordinator, entry_id: str) -> None:
         super().__init__(coordinator, entry_id)
@@ -1678,6 +1716,25 @@ class SystemUptimeSensor(SwitchPortBaseEntity):
             return int(uptime_hsec / 100)
         except (ValueError, TypeError):
             return 0
+
+
+class SystemStartTimeSensor(SwitchPortBaseEntity):
+    """Switch boot time — stable timestamp that only moves on a real reboot."""
+
+    _attr_name = "Online Since"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:clock-start"
+    _attr_unique_id_suffix = "system_start_time"
+
+    def __init__(self, coordinator: SwitchPortCoordinator, entry_id: str) -> None:
+        super().__init__(coordinator, entry_id)
+        self._attr_unique_id = f"{entry_id}_{self._attr_unique_id_suffix}"
+
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.system.get("boot_time")
 
 
 class SystemHostnameSensor(SwitchPortBaseEntity):
@@ -1777,6 +1834,7 @@ async def async_setup_entry(
         FirmwareSensor(coordinator, entry.entry_id),
         SystemMemorySensor(coordinator, entry.entry_id),
         SystemUptimeSensor(coordinator, entry.entry_id),
+        SystemStartTimeSensor(coordinator, entry.entry_id),
         SystemHostnameSensor(coordinator, entry.entry_id),
         TemperatureSensor(coordinator, entry.entry_id),
         FanStatusSensor(coordinator, entry.entry_id),
