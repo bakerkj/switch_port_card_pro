@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_UP_RESTORE_CYCLES,
     CONF_RECORD_DECIMATION,
     DEFAULT_RECORD_DECIMATION,
+    CONF_DEFAULT_ENABLED_SENSORS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -297,7 +298,20 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
 
     def _build_schema(self, current: dict, overrides: dict | None = None) -> vol.Schema:
         """Build the options schema, optionally pre-filling fields from overrides."""
+        # Local import: the per-port sensor catalog lives in the sensor
+        # platform and is the single source of truth for keys/labels/defaults.
+        from .sensor import PORT_SENSOR_DESCRIPTIONS
+
         src = {**current, **(overrides or {})}
+        sensor_choices = {d.key: d.name for d in PORT_SENSOR_DESCRIPTIONS}
+        builtin_default_sensors = [
+            d.key for d in PORT_SENSOR_DESCRIPTIONS if d.enabled_default
+        ]
+        current_default_sensors = [
+            k
+            for k in src.get(CONF_DEFAULT_ENABLED_SENSORS, builtin_default_sensors)
+            if k in sensor_choices
+        ]
         ports_dict = {str(i): str(i) for i in range(1, 65)}
         current_ports = [str(p) for p in src.get(CONF_PORTS, DEFAULT_PORTS)]
         priority_ports_dict = {
@@ -333,6 +347,13 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                     CONF_INCLUDE_VLANS,
                     default=src.get(CONF_INCLUDE_VLANS, True),
                 ): cv.boolean,
+                # Which per-port sensors are enabled by default. Applies to
+                # newly-created entities only (new installs / added ports);
+                # existing entities keep whatever state they already have.
+                vol.Optional(
+                    CONF_DEFAULT_ENABLED_SENSORS,
+                    default=current_default_sensors,
+                ): cv.multi_select(sensor_choices),
                 # --- Auto-manage per-port entities (entity reduction) ---
                 vol.Optional(
                     CONF_AUTO_MANAGE_ENTITIES,

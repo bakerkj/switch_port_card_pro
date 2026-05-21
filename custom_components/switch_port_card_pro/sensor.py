@@ -33,6 +33,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
+    CONF_DEFAULT_ENABLED_SENSORS,
     SNMP_VERSION_TO_MP_MODEL,
     HP_OID_CPU_REALTIME,
     HP_OID_MEMORY_USED,
@@ -1601,7 +1602,6 @@ PORT_SENSOR_DESCRIPTIONS: tuple[PortSensorDescription, ...] = (
         "Port Name",
         lambda _e, p: p.get("name"),
         icon="mdi:tag-outline",
-        enabled_default=False,
     ),
     PortSensorDescription(
         "port_custom",
@@ -1657,6 +1657,7 @@ class PortAttributeSensor(SwitchPortPerPortBaseEntity):
         entry_id: str,
         port: int,
         description: PortSensorDescription,
+        enabled_default: bool | None = None,
     ) -> None:
         super().__init__(coordinator, entry_id, port)
         self._description = description
@@ -1668,7 +1669,11 @@ class PortAttributeSensor(SwitchPortPerPortBaseEntity):
         self._attr_device_class = description.device_class
         self._attr_state_class = description.state_class
         self._attr_icon = description.icon
-        self._attr_entity_registry_enabled_default = description.enabled_default
+        # ``enabled_default`` lets the config option override the built-in
+        # default; None means fall back to the description's own default.
+        self._attr_entity_registry_enabled_default = (
+            description.enabled_default if enabled_default is None else enabled_default
+        )
         self._attr_suggested_display_precision = description.suggested_display_precision
 
     @property
@@ -1934,6 +1939,10 @@ async def async_setup_entry(
         or has_poe_data
     )
     include_vlans = bool(coordinator.include_vlans)
+    # Optional per-install override of which per-port sensors are enabled by
+    # default. Absent => keep each sensor's built-in default (override=None).
+    configured = entry.options.get(CONF_DEFAULT_ENABLED_SENSORS)
+    enabled_keys = set(configured) if configured is not None else None
     for port in coordinator.ports:
         entities.append(PortStatusSensor(coordinator, entry.entry_id, port))
         entities.append(PortInfoSensor(coordinator, entry.entry_id, port))
@@ -1942,8 +1951,9 @@ async def async_setup_entry(
                 continue
             if desc.vlan_only and not include_vlans:
                 continue
+            override = None if enabled_keys is None else desc.key in enabled_keys
             entities.append(
-                PortAttributeSensor(coordinator, entry.entry_id, port, desc)
+                PortAttributeSensor(coordinator, entry.entry_id, port, desc, override)
             )
 
     async_add_entities(entities)

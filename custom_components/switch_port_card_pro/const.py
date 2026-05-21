@@ -14,6 +14,13 @@ CONF_FAST_UPDATE_INTERVAL: Final = "fast_update_interval"
 CONF_INCLUDE_VLANS: Final = "include_vlans"
 CONF_SFP_PORTS_START = "sfp_ports_start"
 
+# Per-port attribute sensors a user wants enabled by default. Stored as a
+# list of sensor keys (see PORT_SENSOR_DESCRIPTIONS). Only applied at entity
+# creation time (new installs / newly-added ports), since Home Assistant
+# honors entity_registry_enabled_default only on first registration. When the
+# option is absent, each sensor falls back to its built-in default.
+CONF_DEFAULT_ENABLED_SENSORS: Final = "default_enabled_sensors"
+
 # --- Auto-manage per-port entities (Repairs-driven entity reduction) ---
 # Master opt-in switch. When off, the manager is inert.
 CONF_AUTO_MANAGE_ENTITIES: Final = "auto_manage_entities"
