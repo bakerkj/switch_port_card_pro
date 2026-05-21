@@ -7,12 +7,12 @@ from typing import Any
 
 import voluptuous as vol
 
-# import homeassistant.helpers.selector as selector
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import selector
 from homeassistant.core import callback
 
 from .snmp_helper import async_snmp_get
@@ -41,6 +41,24 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _int_box(min_value: int, max_value: int) -> selector.NumberSelector:
+    """Numeric text-input selector for an integer in [min_value, max_value].
+
+    HA renders ``vol.Range`` integers as sliders, which are awkward for wide
+    ranges and exact-value settings. ``NumberSelector`` with ``mode=BOX``
+    gives a plain text input with built-in min/max/step validation.
+    """
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=min_value,
+            max=max_value,
+            step=1,
+            mode=selector.NumberSelectorMode.BOX,
+        )
+    )
+
 
 # --- Initial setup schema ---
 STEP_USER_SCHEMA = vol.Schema(
@@ -298,7 +316,7 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_FAST_UPDATE_INTERVAL,
                     default=src.get(CONF_FAST_UPDATE_INTERVAL, 0),
-                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
+                ): _int_box(0, 3600),
                 vol.Optional(
                     CONF_PORTS,
                     default=current_ports,
@@ -325,15 +343,15 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_DOWN_GRACE_HOURS,
                     default=src.get(CONF_DOWN_GRACE_HOURS, DEFAULT_DOWN_GRACE_HOURS),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=8760)),
+                ): _int_box(1, 8760),
                 vol.Optional(
                     CONF_UP_RESTORE_CYCLES,
                     default=src.get(CONF_UP_RESTORE_CYCLES, DEFAULT_UP_RESTORE_CYCLES),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+                ): _int_box(1, 100),
                 vol.Optional(
                     CONF_RECORD_DECIMATION,
                     default=src.get(CONF_RECORD_DECIMATION, DEFAULT_RECORD_DECIMATION),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=20)),
+                ): _int_box(1, 20),
                 # --- Port OIDs ---
                 vol.Optional(
                     "oid_rx",
