@@ -211,10 +211,14 @@ class FakeCoordinator:
         self._listeners.append(cb)
         return lambda: self._listeners.remove(cb)
 
-    def set_status(self, port, on, last_change=None):
+    def set_status(self, port, on, last_change=None, poe_status=0, poe_power=0):
         d = {"status": "on" if on else "off"}
         if last_change is not None:
             d["last_change_seconds"] = last_change
+        if poe_status:
+            d["poe_status"] = poe_status
+        if poe_power:
+            d["poe_power"] = poe_power
         self.data.ports[str(port)] = d
 
 
@@ -793,6 +797,50 @@ async def main():
         and ls.get("transitions") == []
         and ls.get("last_status") is None,
     )
+
+    # ===== Scenario 14: PoE keeps a linkless port "up" =====
+    reset_world()
+    seed_registry([14])
+    coord14 = FakeCoordinator([14])
+    hass14 = FakeHass()
+    mgr14 = new_manager(coord14, FakeEntry(opts(grace_h=24)), hass14)
+    await mgr14.async_load()
+    hass14.data[DOMAIN][EID] = coord14
+    coord14.entity_manager = mgr14
+    iid14 = f"port_down_{EID}_14"
+
+    # No link but delivering PoE (detection enum 3) → up, never flagged.
+    CLOCK.t = 5_000_000.0
+    coord14.set_status(14, False, poe_status=3)
+    await mgr14._async_reconcile()
+    CLOCK.t += 30 * 3600  # well past grace
+    await mgr14._async_reconcile()
+    check("linkless port delivering PoE: not flagged past grace", iid14 not in _ISSUES)
+    check("PoE-up port: extras stay enabled", disabled_by(14, "rx_rate") is None)
+
+    # Power draw alone (no enum) is equally "up".
+    coord14.set_status(14, False, poe_power=4200)
+    CLOCK.t += 30 * 3600
+    await mgr14._async_reconcile()
+    check("linkless port drawing PoE power: not flagged", iid14 not in _ISSUES)
+
+    # Device unplugged: no link AND no PoE → flagged after grace.
+    coord14.set_status(14, False)
+    await mgr14._async_reconcile()  # seeds down_since at now
+    CLOCK.t += 25 * 3600
+    await mgr14._async_reconcile()
+    check("PoE drops and link down: flagged after grace", iid14 in _ISSUES)
+
+    # PoE-only "up" also drives the auto re-enable path.
+    await mgr14.async_disable_port(14)
+    check(
+        "PoE scenario: extras disabled on user approve",
+        disabled_by(14, "rx_rate") == DISABLER.INTEGRATION,
+    )
+    coord14.set_status(14, False, poe_status=3)  # back up via PoE, still no link
+    for _ in range(3):  # default up_restore_cycles
+        await mgr14._async_reconcile()
+    check("PoE-only up restores disabled extras", disabled_by(14, "rx_rate") is None)
 
     # ===== Summary =====
     total = len(RESULTS)

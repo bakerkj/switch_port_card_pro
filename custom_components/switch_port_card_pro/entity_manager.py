@@ -4,13 +4,17 @@ Goal: keep the registry small on switches with many unused ports. Each port
 keeps its `status` indicator always; every *other* per-port entity that is
 currently enabled is a disable candidate when the port is down.
 
+A port is "up" whenever it has a link OR is sourcing PoE — a powered device
+with no negotiated link (a camera mid-boot, say) still means the port is in
+use, so it is never flagged down nor has its entities disabled.
+
 Policy (hybrid):
-  * Auto re-enable (no prompt): a port we disabled, seen "on" for
+  * Auto re-enable (no prompt): a port we disabled, seen "up" for
     `up_restore_cycles` consecutive polls, gets *exactly* the entities we
     disabled re-enabled — nothing more.
-  * Suggest disable (never automatic): a port down continuously past
-    `down_grace_hours` raises a fixable Repair issue. The user chooses to
-    disable that port, disable all flagged ports, or ignore the port.
+  * Suggest disable (never automatic): a port down (no link and no PoE)
+    continuously past `down_grace_hours` raises a fixable Repair issue. The
+    user chooses to disable that port, disable all flagged ports, or ignore it.
   * Flapping ports are not "long down" ports — they are unstable links, and
     nagging about them (or disabling their entities) is the wrong action. A
     port with `FLAP_MIN_TRANSITIONS`+ up<->down transitions inside the trailing
@@ -185,6 +189,25 @@ class PortEntityManager:
             n += 1
         return n
 
+    # --- liveness ----------------------------------------------------------
+
+    @staticmethod
+    def _poe_active(pdata: dict[str, Any]) -> bool:
+        """True if the port is sourcing PoE, regardless of link state.
+
+        ``poe_status`` 3 is the standard ``deliveringPower`` enum value; a
+        positive measured ``poe_power`` is the same conclusion from the power
+        side. Either means a powered device is attached and drawing, so the
+        port is in use even with no link. Mirrors the ``poe_enabled`` logic in
+        the per-port sensor.
+        """
+        if pdata.get("poe_status") == 3:
+            return True
+        try:
+            return float(pdata.get("poe_power") or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
     # --- flap detection ----------------------------------------------------
 
     @staticmethod
@@ -249,20 +272,29 @@ class PortEntityManager:
                 port = str(port_int)
                 pdata = self.coordinator.data.ports.get(port) or {}
                 raw_status = pdata.get("status")
-                status_on = raw_status == "on"
-                status_known = raw_status in ("on", "off")
+                link_on = raw_status == "on"
+                link_known = raw_status in ("on", "off")
+                poe_active = self._poe_active(pdata)
+                # A port counts as "up" when it has a link OR is sourcing PoE.
+                # A powered device with no negotiated link (e.g. a camera mid-
+                # boot, or one that simply never links) still means the port is
+                # in use, so it must not be flagged down or have its entities
+                # disabled. PoE delivering is itself a definite "up" signal, so
+                # the port's state is known even when the link OID is unusable.
+                active = link_on or poe_active
+                active_known = link_known or poe_active
                 st = self._state.setdefault(port, _default_port_state())
                 recorded = list(st.get("disabled_uids") or [])
 
                 # Track up<->down transitions for flap detection. Done first so
                 # every branch (incl. the early continues below) keeps the
-                # window current. Unknown status records nothing.
+                # window current. Unknown state records nothing.
                 if self._note_transition(
-                    st, status_on if status_known else None, now, grace_s
+                    st, active if active_known else None, now, grace_s
                 ):
                     dirty = True
 
-                if status_on:
+                if active:
                     if st["down_since"] is not None:
                         st["down_since"] = None
                         dirty = True

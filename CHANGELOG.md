@@ -1,6 +1,16 @@
 
 ## Changelog
 
+### [1.0.14] - PoE-powered ports count as "up"
+- Auto-manage no longer flags a port as down (and never disables its
+  entities) while it is sourcing PoE, even with no negotiated link. A
+  powered device with no link — a camera mid-boot, or one that simply
+  never links — means the port is in use. "Up" is now link OR PoE
+  delivering (`pethPsePortDetectionStatus` = deliveringPower, or a
+  positive measured PoE draw), applied to the down-grace clock, flap
+  detection, and the auto re-enable path alike. A port is only flagged
+  once it has neither link nor PoE past the grace window.
+
 ### [1.0.12] - Recorder decimation for rx/tx/PoE
 - New "Recorder decimation" option (default 2). SNMP still polls every
   full update, but the high-rate per-port sensors only publish a fresh
