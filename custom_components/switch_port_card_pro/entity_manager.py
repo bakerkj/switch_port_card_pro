@@ -399,10 +399,22 @@ class PortEntityManager:
             translation_placeholders={
                 "host": self.coordinator.host,
                 "port": port,
+                "name_suffix": self._port_name_suffix(port),
                 "hours": str(int(grace_s // 3600)),
             },
             data={"entry_id": self.entry.entry_id, "port": port},
         )
+
+    def _port_name_suffix(self, port: str) -> str:
+        """Return ' (name)' when the switch reports a non-default port name, else ''."""
+        try:
+            pdata = self.coordinator.data.ports.get(port) or {}
+        except AttributeError:
+            pdata = {}
+        name = (pdata.get("name") or "").strip()
+        if not name or name == f"Port {port}":
+            return ""
+        return f" ({name})"
 
     async def _async_save(self) -> None:
         await self._store.async_save({"ports": self._state})

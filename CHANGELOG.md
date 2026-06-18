@@ -1,6 +1,13 @@
 
 ## Changelog
 
+### [1.0.15] - Repair messages name the port
+- The Repairs warning for a long-down port now includes the switch's
+  user-assigned port name (ifAlias) when one is set. The title becomes
+  e.g. `Switch sw1: port 12 (Kitchen AP) down for over 48h`, and the
+  fix-flow header and description follow suit. Ports with no custom name
+  render identically to before.
+
 ### [1.0.14] - PoE-powered ports count as "up"
 - Auto-manage no longer flags a port as down (and never disables its
   entities) while it is sourcing PoE, even with no negotiated link. A
