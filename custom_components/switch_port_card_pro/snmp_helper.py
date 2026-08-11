@@ -30,6 +30,23 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# IANAifType values that are never a user-facing physical switch port.
+# Authoritative when the switch reports ifType (most modern gear does);
+# rejected here as an early-exit before the fragile name-based filters.
+# Values from https://www.iana.org/assignments/ianaiftype-mib/ianaiftype-mib
+_NON_PHYSICAL_IFTYPES: frozenset[int] = frozenset(
+    {
+        24,  # softwareLoopback
+        53,  # propVirtual — Aruba/HP uses this for VLAN interfaces (DEFAULT_VLAN, VLANn)
+        54,  # propMultiplexor
+        131,  # tunnel
+        135,  # l3ipvlan (SVI)
+        136,  # l3ipxvlan (IPX SVI)
+        150,  # mplsTunnel
+        161,  # ieee8023adLag — LAG/trunk aggregate (Trkn on Aruba)
+    }
+)
+
 # MAU-MIB RFC 3636 (updated by RFC 4836): ifMauType values that indicate fiber/SFP media.
 # Values are OID identities under dot3MauType (1.3.6.1.2.1.26.4).
 # Suffix assignments verified against RFC 3636 §4 (entries 1-40) and RFC 4836 §4 (entries 41+).
@@ -474,7 +491,14 @@ async def discover_physical_ports(
             except (ValueError, IndexError, AttributeError):
                 continue
 
-            # === STEP 1: Reject obvious virtual/junk interfaces ===
+            # === STEP 1a: Reject by ifType (IANAifType — authoritative when reported) ===
+            # Cheap switches sometimes omit or misreport ifType; the name-based
+            # filters below stay as a fallback for those cases.
+            if_type = _get_interface_type(type_data, if_index)
+            if if_type in _NON_PHYSICAL_IFTYPES:
+                continue
+
+            # === STEP 1b: Reject obvious virtual/junk interfaces by name ===
             if _is_virtual_interface(descr_lower):
                 continue
 
@@ -502,7 +526,7 @@ async def discover_physical_ports(
                 port_type = MAU_TYPE_NAMES.get(mau_type_oid, "unknown")
                 detection = "mau_mib"
             else:
-                if_type = _get_interface_type(type_data, if_index)
+                # if_type already fetched at STEP 1a
                 is_sfp, detection = _detect_sfp_port(if_type, descr_lower, manufacturer)
                 is_copper = not is_sfp
                 port_type = "unknown"
