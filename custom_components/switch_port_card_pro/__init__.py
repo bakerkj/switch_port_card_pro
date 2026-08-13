@@ -1,6 +1,7 @@
 """Switch Port Card Pro integration - __init__.py"""
 
 from __future__ import annotations
+import asyncio
 import os
 import shutil
 import logging
@@ -163,9 +164,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     force_redetect = entry.options.get("re_detect_ports", False)
     is_first_install = CONF_PORTS not in entry.options or force_redetect
 
+    # Bounded discovery — cap total SNMP time so an unresponsive switch
+    # can't wedge HA startup. Existing config (if any) is used on timeout;
+    # coordinator's periodic refresh will pick up the switch when it comes
+    # back. First install with a dead switch falls through to the 8-port
+    # default (see lines below).
+    _DISCOVERY_TIMEOUT_S = 20
     try:
-        detected = await discover_physical_ports(
-            hass, host, community, snmp_port, mp_model
+        detected = await asyncio.wait_for(
+            discover_physical_ports(hass, host, community, snmp_port, mp_model),
+            timeout=_DISCOVERY_TIMEOUT_S,
         )
         if detected:
             # --- EXTRACT METADATA ---
@@ -194,6 +202,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         else:
             _LOGGER.debug("Port detection returned no results on %s", host)
+    except asyncio.TimeoutError:
+        _LOGGER.warning(
+            "Port discovery on %s timed out after %ds — using existing config; "
+            "will retry on next update cycle. If this is a first install, "
+            "8-port defaults will be used.",
+            host,
+            _DISCOVERY_TIMEOUT_S,
+        )
+        detected = None
     except Exception as err:
         _LOGGER.debug(
             "Port detection failed on %s: %s (will use manual config)", host, err
