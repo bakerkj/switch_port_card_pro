@@ -46,6 +46,7 @@ from .const import (
     HP_MANUFACTURER_KEYWORDS,
     CONF_OID_IFHCINOCTETS,
     CONF_OID_IFHCOUTOCTETS,
+    CONF_OID_IFHIGHSPEED,
     CONF_OID_IFINERRORS,
     CONF_OID_IFOUTERRORS,
     CONF_OID_IFINDISCARDS,
@@ -277,6 +278,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 out_discards_raw,
                 admin_status_raw,
                 last_change_raw,
+                high_speed_raw,
                 *results,
             ) = await asyncio.gather(
                 async_snmp_walk(
@@ -341,6 +343,14 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     self.community,
                     self.snmp_port,
                     CONF_OID_IFLASTCHANGE,
+                    mp_model=self.mp_model,
+                ),
+                async_snmp_walk(
+                    self.hass,
+                    self.host,
+                    self.community,
+                    self.snmp_port,
+                    CONF_OID_IFHIGHSPEED,
                     mp_model=self.mp_model,
                 ),
                 *tasks,
@@ -459,6 +469,11 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 sys_uptime_ticks = None
             status = parse(walk_map.get("status", {}))
             speed = parse(walk_map.get("speed", {}))
+            # ifHighSpeed (Mbps) — preferred over ifSpeed for 10G+ links, which
+            # overflow ifSpeed's 32-bit bps gauge (ceilings at ~4.29 Gbps).
+            high_speed = parse(
+                high_speed_raw if not isinstance(high_speed_raw, Exception) else {}
+            )
             name = parse(walk_map.get("name", {}), int_val=False)
             vlan = parse(walk_map.get("vlan", {}))
             poe_power = parse(walk_map.get("poe_power", {}))
@@ -567,11 +582,13 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                 )
 
                 if any(if_index in t for t in (status, speed, rx, tx, poe_power)):
-                    HighLowSpeed = speed.get(if_index, 0)
-                    if (
-                        HighLowSpeed < 100000
-                    ):  # check if we use the 32 or 64 bit variant
-                        HighLowSpeed = HighLowSpeed * 1000000  # convert to bps
+                    # Prefer ifHighSpeed (Mbps) when reported; fall back to
+                    # ifSpeed (bps) for legacy gear that omits the ifXTable OID.
+                    hi_mbps = high_speed.get(if_index, 0)
+                    if hi_mbps and hi_mbps > 0:
+                        HighLowSpeed = hi_mbps * 1_000_000  # Mbps → bps
+                    else:
+                        HighLowSpeed = speed.get(if_index, 0)  # already bps
                     lc_dt = self._resolve_last_change(
                         if_index, sys_uptime_ticks, last_change
                     )
