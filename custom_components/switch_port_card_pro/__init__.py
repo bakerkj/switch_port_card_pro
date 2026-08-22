@@ -26,6 +26,7 @@ from .const import (
     CONF_PRIORITY_PORTS,
     CONF_FAST_UPDATE_INTERVAL,
     CONF_INCLUDE_VLANS,
+    CONF_ENABLE_PORT_MAC_LINK,
     CONF_SNMP_PORT,
     CONF_RECORD_DECIMATION,
     SNMP_VERSION_TO_MP_MODEL,
@@ -401,6 +402,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator.device_name = entry.title
     coordinator.port_mapping = detected or {}  # Empty dict if detection failed
     coordinator.manufacturer = manufacturer
+    coordinator.enable_port_mac_link = entry.options.get(
+        CONF_ENABLE_PORT_MAC_LINK, True
+    )
     coordinator.config_entry = entry
     coordinator.update_interval = timedelta(seconds=fast_update_seconds)
 

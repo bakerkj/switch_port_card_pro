@@ -30,6 +30,7 @@ from .const import (
     DEFAULT_SNMP_PORT,
     CONF_OID_SYSNAME,
     CONF_INCLUDE_VLANS,
+    CONF_ENABLE_PORT_MAC_LINK,
     CONF_AUTO_MANAGE_ENTITIES,
     CONF_DOWN_GRACE_HOURS,
     CONF_UP_RESTORE_CYCLES,
@@ -346,6 +347,10 @@ class SwitchPortCardProOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_INCLUDE_VLANS,
                     default=src.get(CONF_INCLUDE_VLANS, True),
+                ): cv.boolean,
+                vol.Optional(
+                    CONF_ENABLE_PORT_MAC_LINK,
+                    default=src.get(CONF_ENABLE_PORT_MAC_LINK, True),
                 ): cv.boolean,
                 # Which per-port sensors are enabled by default. Applies to
                 # newly-created entities only (new installs / added ports);
