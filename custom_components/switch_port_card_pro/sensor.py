@@ -533,6 +533,56 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     except (ValueError, IndexError):
                         continue
 
+            # Learn each single-client edge port's MAC from the FDB (skip
+            # uplinks/trunks, which carry many MACs). Opt-in; one extra SNMP walk.
+            ifindex_to_client_mac: dict[int, str] = {}
+            if getattr(self, "enable_port_mac_link", False):
+                bridge_fdb, fdb_walk = await asyncio.gather(
+                    async_snmp_walk(
+                        self.hass,
+                        self.host,
+                        self.community,
+                        self.snmp_port,
+                        "1.3.6.1.2.1.17.1.4.1.2",  # dot1dBasePortIfIndex (RFC 4188)
+                        mp_model=self.mp_model,
+                    ),
+                    async_snmp_walk(
+                        self.hass,
+                        self.host,
+                        self.community,
+                        self.snmp_port,
+                        "1.3.6.1.2.1.17.7.1.2.2.1.2",  # dot1qTpFdbPort (Q-BRIDGE-MIB)
+                        mp_model=self.mp_model,
+                    ),
+                )
+                bridge_port_to_if: dict[int, int] = {}
+                for b_oid, b_val in bridge_fdb.items():
+                    try:
+                        bridge_port_to_if[int(b_oid.split(".")[-1])] = int(b_val)
+                    except (ValueError, IndexError):
+                        continue
+                if_macs: dict[int, set[str]] = {}
+                for f_oid, f_val in fdb_walk.items():
+                    parts = f_oid.split(".")
+                    if len(parts) < 6:
+                        continue
+                    try:
+                        mac_octets = [int(x) for x in parts[-6:]]
+                        bridge_port = int(f_val)
+                    except (ValueError, IndexError):
+                        continue
+                    # skip unlearned (port 0) and multicast/broadcast MACs
+                    if bridge_port == 0 or (mac_octets[0] & 1):
+                        continue
+                    if_index_f = bridge_port_to_if.get(bridge_port)
+                    if if_index_f is None:
+                        continue
+                    mac = ":".join(f"{o:02x}" for o in mac_octets)
+                    if_macs.setdefault(if_index_f, set()).add(mac)
+                for if_index_f, macs in if_macs.items():
+                    if len(macs) == 1:  # single-client edge port only
+                        ifindex_to_client_mac[if_index_f] = next(iter(macs))
+
             ports_data: dict[str, dict[str, Any]] = {}
             total_rx = total_tx = total_poe_mw = 0
             now = time.monotonic()
@@ -567,6 +617,7 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                     "out_discards": 0,
                     "last_change": None,
                     "last_change_seconds": None,
+                    "client_mac": ifindex_to_client_mac.get(if_index),
                 }
 
                 # For VLAN: dot1qPvid is indexed by bridge port, not ifIndex (RFC 4363).
@@ -1296,8 +1347,22 @@ class SwitchPortPerPortBaseEntity(SensorEntity):
             model_bits.append(port_info["if_descr"])
         model = " / ".join(model_bits) if model_bits else None
 
+        # Link a single-client edge port to the connected device via its MAC.
+        client_mac = (self._port_data() or {}).get("client_mac")
+        connections = (
+            {
+                (
+                    device_registry.CONNECTION_NETWORK_MAC,
+                    device_registry.format_mac(client_mac),
+                )
+            }
+            if client_mac
+            else set()
+        )
+
         self._attr_device_info = DeviceInfo(
             identifiers={port_identifier},
+            connections=connections,
             name=device_name,
             manufacturer=manufacturer,
             model=model,
@@ -1364,6 +1429,26 @@ class SwitchPortPerPortBaseEntity(SensorEntity):
                 new_name = f"{switch_label} / Port {self.port} ({port_name})"
             if device_entry.name != new_name:
                 dev_reg.async_update_device(device_entry.id, name=new_name)
+            # Attach the FDB-learned client MAC once data is available (the device
+            # is first created before the coordinator's first poll). get_or_create
+            # reconciles a shared MAC into a link; update_device would raise.
+            client_mac = self._port_data().get("client_mac")
+            if client_mac:
+                conn = (
+                    device_registry.CONNECTION_NETWORK_MAC,
+                    device_registry.format_mac(client_mac),
+                )
+                if conn not in device_entry.connections:
+                    dev_reg.async_get_or_create(
+                        config_entry_id=self.entry_id,
+                        identifiers={
+                            (
+                                DOMAIN,
+                                f"{self.entry_id}_{self.coordinator.host}_port_{self.port}",
+                            )
+                        },
+                        connections={conn},
+                    )
         except Exception as err:
             _LOGGER.debug(
                 "Port device update failed for %s port %s: %s",

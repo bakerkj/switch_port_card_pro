@@ -12,6 +12,8 @@ CONF_PORTS: Final = "ports"
 CONF_PRIORITY_PORTS: Final = "priority_ports"
 CONF_FAST_UPDATE_INTERVAL: Final = "fast_update_interval"
 CONF_INCLUDE_VLANS: Final = "include_vlans"
+# Link single-client ports to their connected device via the FDB-learned MAC.
+CONF_ENABLE_PORT_MAC_LINK: Final = "enable_port_mac_link"
 CONF_SFP_PORTS_START = "sfp_ports_start"
 
 # Per-port attribute sensors a user wants enabled by default. Stored as a
