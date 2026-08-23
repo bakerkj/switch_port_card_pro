@@ -579,9 +579,19 @@ class SwitchPortCoordinator(DataUpdateCoordinator[SwitchPortData]):
                         continue
                     mac = ":".join(f"{o:02x}" for o in mac_octets)
                     if_macs.setdefault(if_index_f, set()).add(mac)
+                # A MAC must also be unique across ports: a roaming client or a
+                # stale FDB entry can be the sole MAC on two ports, which would
+                # collide when both stamp it. Only keep MACs learned on one port.
+                mac_to_ifindexes: dict[str, set[int]] = {}
                 for if_index_f, macs in if_macs.items():
-                    if len(macs) == 1:  # single-client edge port only
-                        ifindex_to_client_mac[if_index_f] = next(iter(macs))
+                    for mac in macs:
+                        mac_to_ifindexes.setdefault(mac, set()).add(if_index_f)
+                for if_index_f, macs in if_macs.items():
+                    if len(macs) != 1:  # single-client edge port only
+                        continue
+                    mac = next(iter(macs))
+                    if len(mac_to_ifindexes[mac]) == 1:  # and on exactly one port
+                        ifindex_to_client_mac[if_index_f] = mac
 
             ports_data: dict[str, dict[str, Any]] = {}
             total_rx = total_tx = total_poe_mw = 0
@@ -1429,26 +1439,27 @@ class SwitchPortPerPortBaseEntity(SensorEntity):
                 new_name = f"{switch_label} / Port {self.port} ({port_name})"
             if device_entry.name != new_name:
                 dev_reg.async_update_device(device_entry.id, name=new_name)
-            # Attach the FDB-learned client MAC once data is available (the device
-            # is first created before the coordinator's first poll). get_or_create
-            # reconciles a shared MAC into a link; update_device would raise.
+            # Reconcile the port's client-MAC link to exactly the current single
+            # client: add the new MAC and prune any previously-stamped one, so a
+            # port that saw a different client before is not left linked to every
+            # host ever seen on it. Cross-entry shared MACs link without colliding;
+            # finding-5 dedup keeps a MAC on one port, avoiding same-entry clashes.
             client_mac = self._port_data().get("client_mac")
-            if client_mac:
-                conn = (
-                    device_registry.CONNECTION_NETWORK_MAC,
-                    device_registry.format_mac(client_mac),
-                )
-                if conn not in device_entry.connections:
-                    dev_reg.async_get_or_create(
-                        config_entry_id=self.entry_id,
-                        identifiers={
-                            (
-                                DOMAIN,
-                                f"{self.entry_id}_{self.coordinator.host}_port_{self.port}",
-                            )
-                        },
-                        connections={conn},
-                    )
+            desired = device_registry.format_mac(client_mac) if client_mac else None
+            current = {
+                v
+                for t, v in device_entry.connections
+                if t == device_registry.CONNECTION_NETWORK_MAC
+            }
+            if current != ({desired} if desired else set()):
+                kept = {
+                    (t, v)
+                    for t, v in device_entry.connections
+                    if t != device_registry.CONNECTION_NETWORK_MAC
+                }
+                if desired:
+                    kept.add((device_registry.CONNECTION_NETWORK_MAC, desired))
+                dev_reg.async_update_device(device_entry.id, new_connections=kept)
         except Exception as err:
             _LOGGER.debug(
                 "Port device update failed for %s port %s: %s",
